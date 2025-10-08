@@ -25,7 +25,7 @@ function EarthSciMLBase.couple2(
 )
     d, gp = d.sys, gp.sys
 
-    d = param_to_var(d, :Ts, :z, :z₀, :u_star, :G, :ρA, :L, :lev)
+    d = param_to_var(d, :Ts, :z, z_top1, :z₀, :u_star, :G, :ρA, :L, :lev)
 
     ConnectorSystem(
         [
