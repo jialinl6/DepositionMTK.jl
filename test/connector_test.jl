@@ -71,3 +71,30 @@ end
     wanteq = "WetDeposition₊cloudFrac(t) ~ GEOSFP₊A3cld₊CLOUD(t)"
     @test contains(eqs, wanteq)
 end
+
+@testitem "EarthSciDataExt fractional gas dry deposition" setup = [ConnectorSetup] begin
+    # Verify the new couple2 method binds the fractional gas coupler's
+    # lon/lat/season to GEOS-FP and that the 9 surface-meteorology
+    # bindings carry over from the scalar-landuse coupler.
+    model = couple(
+        GEOSFP("4x5", domain),
+        DryDepositionGasFractional(),
+    )
+    sys = convert(System, model)
+    eqs = string(equations(sys)) * "\n" * string(observed(sys))
+
+    # New (fractional-specific) bindings.
+    @test contains(eqs, "DryDepositionGasFractional₊lon")
+    @test contains(eqs, "DryDepositionGasFractional₊lat")
+    @test contains(eqs, "season_at")
+    @test contains(eqs, "GEOSFP₊t_ref")
+
+    # Carried over from the scalar-landuse coupler.
+    @test contains(eqs, "GEOSFP₊A1₊USTAR")
+    @test contains(eqs, "GEOSFP₊A1₊TS")
+    @test contains(eqs, "GEOSFP₊A1₊SWGDN")
+
+    # No scalar landuse parameter survives (the fractional system never
+    # declared one — sanity guard against silent regression).
+    @test !contains(eqs, "DryDepositionGasFractional₊landuse")
+end

@@ -2,6 +2,7 @@ module EarthSciDataExt
 
 using AtmosphericDeposition,
     EarthSciData, EarthSciMLBase, DynamicQuantities, ModelingToolkit
+using ModelingToolkit: t
 
 @constants(MW_air=0.029,
     [unit=u"kg/mol", description="Dry air molar mass"],
@@ -35,7 +36,7 @@ function EarthSciMLBase.couple2(
     return ConnectorSystem(
         [
             d.Ts ~ gp.A1₊TS,
-            d.z ~ gp.Z_agl, 
+            d.z ~ gp.Z_agl,
             d.del_P ~ first_level_pressure_thickness(gp.I3₊PS),
             d.z₀ ~ gp.A1₊Z0M,
             d.u_star ~ gp.A1₊USTAR,
@@ -46,6 +47,41 @@ function EarthSciMLBase.couple2(
         ],
         d,
         gp
+    )
+end
+
+# Fractional / mosaic gas dry deposition: same surface-meteorology bindings
+# as the scalar-landuse coupler above, plus `lon`/`lat` (so the system's
+# 11 `f_*` variables can be evaluated by `landuse_frac_at(lon, lat, i)`)
+# and a date-driven `season`.
+function EarthSciMLBase.couple2(
+        d::AtmosphericDeposition.DryDepositionGasFractionalCoupler,
+        gp::EarthSciData.GEOSFPCoupler
+    )
+    d, gp = d.sys, gp.sys
+
+    d = param_to_var(d,
+        :Ts, :z, :del_P, :z₀, :u_star, :G, :ρA, :L, :lev,
+        :lon, :lat, :season,
+    )
+
+    return ConnectorSystem(
+        [
+            d.Ts ~ gp.A1₊TS,
+            d.z ~ gp.Z_agl,
+            d.del_P ~ first_level_pressure_thickness(gp.I3₊PS),
+            d.z₀ ~ gp.A1₊Z0M,
+            d.u_star ~ gp.A1₊USTAR,
+            d.G ~ gp.A1₊SWGDN,
+            d.ρA ~ air_density(gp.P, gp.I3₊T),
+            d.L ~ MoninObhukovLength(d.ρA, gp.A1₊TS, gp.A1₊USTAR, gp.A1₊HFLUX),
+            d.lev ~ gp.lev,
+            d.lon ~ gp.lon,
+            d.lat ~ gp.lat,
+            d.season ~ AtmosphericDeposition.season_at(gp.t_ref + t),
+        ],
+        d,
+        gp,
     )
 end
 

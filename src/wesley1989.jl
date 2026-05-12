@@ -401,3 +401,28 @@ function WesleySurfaceResistance(
     r_c = min(r_c, 9999.0)
     return r_c
 end
+
+# Area-weighted surface resistance combining all 11 Wesely (1989) land-use classes
+# as parallel conductances: 1/Rc_eff = Σᵢ (fᵢ / Rc_i), where Rc_i is the Wesely
+# surface resistance for class i. Matches CMAQ STAGE (Pleim & Ran, 2011) and
+# GEOS-Chem `drydep_mod`. Classes with fᵢ = 0 contribute zero (no early-exit
+# since fractions may be symbolic). Fractions should sum to ≈ 1; any leftover
+# is silently dropped.
+function FractionalWesleyRc(
+        gasData::GasData, G, Ts, θ, iSeason,
+        f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
+        f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
+        rain::Bool, dew::Bool, isSO2::Bool, isO3::Bool
+    )
+    fractions = (
+        f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
+        f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
+    )
+    inv_Rc = sum(
+        fractions[i] / WesleySurfaceResistance(
+            gasData, G, Ts, θ, iSeason, i, rain, dew, isSO2, isO3
+        )
+        for i in 1:11
+    )
+    return 1.0 / inv_Rc
+end
