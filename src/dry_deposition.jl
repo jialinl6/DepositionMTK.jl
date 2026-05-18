@@ -1,4 +1,7 @@
-export DryDepositionGas, DryDepositionGasFractional, DryDepositionAerosol
+export DryDepositionGasFractional, DryDepositionAerosol
+# `DryDepositionGas` (scalar-landuse variant) is no longer exported; the
+# fractional/mosaic version is the only public gas dry-deposition system.
+# See the commented-out constructor below.
 
 @constants g = 9.81 [unit = u"m*s^-2", description = "gravitational acceleration"]
 @constants κ = 0.4 [description = "von Karman constant"]
@@ -309,6 +312,14 @@ struct DryDepositionGasCoupler
     sys::Any
 end
 
+# NOTE: The scalar-landuse `DryDepositionGas` constructor below is
+# commented out. The fractional/mosaic `DryDepositionGasFractional`
+# (further down) is now the only public gas dry-deposition system and
+# reuses `DryDepositionGasCoupler` (defined above) so existing chemistry
+# couplers in `ext/GasChemExt.jl` continue to apply without modification.
+# The `DryDepGas` helper function (above) is left live in case it is
+# useful for ad-hoc work; nothing in the package calls it any more.
+#=
 """
 DescriptionGas: This is a box model used to calculate the gas species concentration rate changed by dry deposition.
 Build Dry deposition model (gas)
@@ -1029,6 +1040,7 @@ function DryDepositionGas(; name = :DryDepositionGas)
         metadata = Dict(CoupleType => DryDepositionGasCoupler)
     )
 end
+=#
 
 struct DryDepositionAerosolCoupler
     sys::Any
@@ -1081,9 +1093,12 @@ function DryDepositionAerosol(; name = :DryDepositionAerosol)
     )
 end
 
-struct DryDepositionGasFractionalCoupler
-    sys::Any
-end
+# `DryDepositionGasFractionalCoupler` removed: the fractional system now
+# uses `DryDepositionGasCoupler` so existing chemistry couplers (SuperFast,
+# Pollu, GEOSChemGasPhase) in `ext/GasChemExt.jl` apply automatically.
+# struct DryDepositionGasFractionalCoupler
+#     sys::Any
+# end
 
 # Internal helper, parallel to DryDepGas. Computes Vd using fractional
 # (mosaic) Rc via FractionalWesleyRc instead of the single-class Wesely Rc.
@@ -1121,11 +1136,13 @@ variables instead of a single dominant `landuse` index. Vd is computed by
 combining the per-class Wesely (1989) surface resistances as parallel
 conductances (CMAQ STAGE / GEOS-Chem `drydep_mod` convention).
 
-When coupled via `couple2(::DryDepositionGasFractionalCoupler, ::GEOSFPCoupler)`,
+When coupled via `couple2(::DryDepositionGasCoupler, ::GEOSFPCoupler)`,
 `lon`/`lat` are bound to the GEOS-FP grid coordinates and the 11 fraction
 variables are computed via `landuse_frac_at(lon, lat, i)`. `season` is bound
 to a date-driven expression assuming Northern-Hemisphere mid-latitudes —
-override manually for SH or tropical use.
+override manually for SH or tropical use. Chemistry-side wiring (SuperFast,
+Pollu, GEOSChemGasPhase) is inherited from the existing `couple2` methods
+on `DryDepositionGasCoupler` in `ext/GasChemExt.jl`.
 
 # Uncoupled defaults
 The PR 1 `landuse_frac_at` stub returns `f_mixedforest = 1.0` everywhere
@@ -1884,6 +1901,6 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
         eqs,
         t;
         name = name,
-        metadata = Dict(CoupleType => DryDepositionGasFractionalCoupler)
+        metadata = Dict(CoupleType => DryDepositionGasCoupler)
     )
 end

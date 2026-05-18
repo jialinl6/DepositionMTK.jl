@@ -13,6 +13,11 @@
     )
 end
 
+# Scalar-landuse `DryDepositionGas` test disabled: that constructor is
+# commented out in `src/dry_deposition.jl`. The chemistry-side coupling it
+# exercised now runs through `DryDepositionGasFractional`, which uses the
+# same `DryDepositionGasCoupler` (see the fractional test further below).
+#=
 @testitem "GasChemExt SuperFast DryDeposition" begin
     using AtmosphericDeposition, GasChem, EarthSciMLBase, ModelingToolkit
     using Test
@@ -28,6 +33,7 @@ end
     @test contains(eqs, "SuperFast₊DryDepositionGas_k_H2O2")
     @test contains(eqs, "SuperFast₊DryDepositionGas_k_HCHO")
 end
+=#
 
 @testitem "GasChemExt SuperFast WetDeposition" begin
     using AtmosphericDeposition, GasChem, EarthSciMLBase, ModelingToolkit

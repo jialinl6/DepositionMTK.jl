@@ -25,6 +25,12 @@ MoninObhukovLength(ρ_air, Ts, u_star, HFLUX) = -ρ_air * Cp * Ts * (u_star)^3 /
 # First level pressure thickness using the first 2 values of Ap and Bp
 first_level_pressure_thickness(P) = -0.04804826 * P_unit + P * 0.015048
 
+# Previous scalar-landuse gas dry deposition coupler — kept here for
+# reference. Disabled because `DryDepositionGas` (the scalar constructor)
+# is itself commented out in `src/dry_deposition.jl`, and the fractional
+# system now uses `DryDepositionGasCoupler` (handled by the renamed method
+# below).
+#=
 function EarthSciMLBase.couple2(
         d::AtmosphericDeposition.DryDepositionGasCoupler,
         gp::EarthSciData.GEOSFPCoupler
@@ -49,13 +55,15 @@ function EarthSciMLBase.couple2(
         gp
     )
 end
+=#
 
-# Fractional / mosaic gas dry deposition: same surface-meteorology bindings
-# as the scalar-landuse coupler above, plus `lon`/`lat` (so the system's
-# 11 `f_*` variables can be evaluated by `landuse_frac_at(lon, lat, i)`)
-# and a date-driven `season`.
+# Gas dry deposition (fractional / mosaic — the only gas variant) bound to
+# GEOS-FP. Binds surface meteorology plus `lon`/`lat` (used by the system's
+# 11 `f_*` variables via `landuse_frac_at(lon, lat, i)`) and a date-driven
+# `season`. Dispatches on `DryDepositionGasCoupler` so existing chemistry
+# couplers in `ext/GasChemExt.jl` apply unchanged.
 function EarthSciMLBase.couple2(
-        d::AtmosphericDeposition.DryDepositionGasFractionalCoupler,
+        d::AtmosphericDeposition.DryDepositionGasCoupler,
         gp::EarthSciData.GEOSFPCoupler
     )
     d, gp = d.sys, gp.sys
