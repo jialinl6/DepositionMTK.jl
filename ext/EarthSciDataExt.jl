@@ -25,45 +25,10 @@ MoninObhukovLength(ρ_air, Ts, u_star, HFLUX) = -ρ_air * Cp * Ts * (u_star)^3 /
 # First level pressure thickness using the first 2 values of Ap and Bp
 first_level_pressure_thickness(P) = -0.04804826 * P_unit + P * 0.015048
 
-# Previous scalar-landuse gas dry deposition coupler — kept here for
-# reference. Disabled because `DryDepositionGas` (the scalar constructor)
-# is itself commented out in `src/dry_deposition.jl`, and the fractional
-# system now uses `DryDepositionGasCoupler` (handled by the renamed method
-# below).
-#=
-function EarthSciMLBase.couple2(
-        d::AtmosphericDeposition.DryDepositionGasCoupler,
-        gp::EarthSciData.GEOSFPCoupler
-    )
-    d, gp = d.sys, gp.sys
-
-    d = param_to_var(d, :Ts, :z, :del_P, :z₀, :u_star, :G, :ρA, :L, :lev)
-
-    return ConnectorSystem(
-        [
-            d.Ts ~ gp.A1₊TS,
-            d.z ~ gp.Z_agl,
-            d.del_P ~ first_level_pressure_thickness(gp.I3₊PS),
-            d.z₀ ~ gp.A1₊Z0M,
-            d.u_star ~ gp.A1₊USTAR,
-            d.G ~ gp.A1₊SWGDN,
-            d.ρA ~ air_density(gp.P, gp.I3₊T),
-            d.L ~ MoninObhukovLength(d.ρA, gp.A1₊TS, gp.A1₊USTAR, gp.A1₊HFLUX),
-            d.lev ~ gp.lev,
-        ],
-        d,
-        gp
-    )
-end
-=#
-
-# Gas dry deposition (fractional / mosaic — the only gas variant) bound to
-# GEOS-FP. Binds surface meteorology, a date-driven `season`, and the 11
-# land-use area fractions. The fractions are computed natively from the
-# bundled CONUS NetCDF via `landuse_frac_at(gp.lon, gp.lat, i)` — one
-# lookup per fraction per cell per RHS, shared across all 132 species.
-# Dispatches on `DryDepositionGasCoupler` so existing chemistry couplers
-# in `ext/GasChemExt.jl` apply unchanged.
+# Gas dry deposition (fractional / mosaic) bound to GEOS-FP. Binds surface
+# meteorology, the date-driven `season`, and the 11 land-use area fractions
+# (looked up from the bundled CONUS NetCDF via
+# `landuse_frac_at(gp.lon, gp.lat, i)`).
 function EarthSciMLBase.couple2(
         d::AtmosphericDeposition.DryDepositionGasCoupler,
         gp::EarthSciData.GEOSFPCoupler

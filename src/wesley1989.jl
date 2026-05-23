@@ -241,11 +241,11 @@ const SO2Data = GasData(1.885407166, 100000.0, 0.0)
 const RCOOHData = GasData(2.027959554, 1520.0, 1.0)
 
 # Look up a Wesely table entry. Both `iSeason` (1..5) and `iLandUse` (1..11)
-# arrive as concrete numerics at RHS time once the caller `FractionalWesleyRc`
-# is `@register_symbolic`'d below: the inner 11-class loop runs as native
-# Julia, not as a symbolic trace. Direct array indexing is therefore correct,
-# ~333× faster than the previous `DataInterpolations.LinearInterpolation(...)`
-# (1.2 ns vs 401 ns), and allocation-free.
+# arrive as concrete Ints at trace time (the `for i in 1:11` loop inside
+# `FractionalWesleyRc` is unrolled by MTK when traced symbolically). Direct
+# array indexing is therefore correct, ~333× faster than the previous
+# `DataInterpolations.LinearInterpolation(...)` (1.2 ns vs 401 ns), and
+# allocation-free.
 #
 # Also fixes a silent boundary bug in the previous version: the LinearInterpolation
 # with `ExtrapolationType.Constant` returned 0.0 instead of `matrix[5, 11]` (the
@@ -443,135 +443,3 @@ function FractionalWesleyRc(
     return 1.0 / inv_Rc
 end
 
-# Symbolic leaf for the fractional (mosaic) Wesely surface resistance.
-# One registered call per species per cell (132 boundary crossings total
-# for the GEOSChemGasPhase mechanism); the 11-class parallel-conductance
-# loop runs natively behind this boundary, so `WesleySurfaceResistance`
-# itself does NOT need to be registered.
-@register_symbolic FractionalWesleyRc(
-    gasData::GasData, G, Ts, θ, iSeason,
-    f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
-    f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
-    rain::Bool, dew::Bool, isSO2::Bool, isO3::Bool,
-)
-
-# Unit-validation dummy. During MTK's unit-checking pass, the typed
-# `::GasData` argument is substituted with `nothing` (MTK has no GasData
-# value to use since the type isn't `Real`/`Quantity`), so dispatch lands
-# here. `args...` absorbs the remaining numeric/bool args (which may
-# arrive as `Quantity` for G/Ts). Result is dimensionless (caller
-# multiplies by `Rc_unit`). Matches the scalar `WesleySurfaceResistance`
-# convention.
-function FractionalWesleyRc(::Nothing, args...)
-    1.0
-end
-
-ModelingToolkit.get_unit(::typeof(FractionalWesleyRc)) = 1.0
-
-# NOTE: `WesleySurfaceResistance` is NOT the symbolic leaf for the
-# fractional path — the leaf is `FractionalWesleyRc` (registered just
-# above), called once per species per cell with the 11 fractions already
-# resolved to scalars by the coupler. `WesleySurfaceResistance` stays a
-# plain Julia function called 11 times natively inside `FractionalWesleyRc`.
-# Net: 132 symbolic boundary crossings per cell (one per species),
-# matching the scalar `DryDepositionGas` shape.
-#=
-@register_symbolic WesleySurfaceResistance(
-    gd::GasData, G, Ts, θ, iSeason, iLandUse::Int,
-    rain::Bool, dew::Bool, isSO2::Bool, isO3::Bool
-)
-
-# Unit-validation dummy. During MTK's unit-checking pass, the
-# type-asserted `::GasData` argument is replaced by `Nothing` (MTK has no
-# `GasData` value to substitute since the type isn't `Real`/`Quantity`),
-# while the remaining numeric args arrive as `DynamicQuantities.Quantity`.
-# The caller multiplies the result by `Rc_unit` (= u"s/m") itself, so this
-# function is dimensionless on the inside — return 1.0 (matches the
-# `landuse_frac_at` / `season_at` / `A_table` conventions in this package).
-function WesleySurfaceResistance(::Nothing, args...)
-    1.0
-end
-
-ModelingToolkit.get_unit(::typeof(WesleySurfaceResistance)) = 1.0
-=#
-
-# ─── Reverted: species-keyed registered leaf no longer used ──────────────
-# `FractionalWesleyRc` (above) is now the registered symbolic leaf, called
-# once per species per cell with the species' `GasData` value passed
-# directly at the broadcast site in `DryDepositionGasFractional`. This
-# mirrors the scalar `DryDepositionGas` pattern: `datas = [...]` enumerated
-# in the constructor, `isSO2`/`isO3` flags set at the broadcast site, and
-# no const lookup tables here.
-#
-# The species-keyed leaf below was an earlier Variant-B attempt; kept
-# commented out for archaeology in case the lookup-table machinery becomes
-# useful again. See [[code_removal]] memory.
-#=
-const _SPECIES_DATA = (
-    NoData, AldData, HchoData, OpData, PaaData, OraData, Nh3Data, Hno2Data,
-    ACETData, ACTAData, ALD2Data, AROMP4Data, AROMP5Data, ATOOHData, BALDData,
-    BENZPData, Br2Data, BrClData, BrNO3Data, BZCO3HData, BZPANData, CH2OData,
-    Cl2Data, ClNO2Data, ClNO3Data, ClOData, ClOOData, CSLData, EOHData,
-    ETHLNData, ETHNData, ETHPData, ETNO3Data, ETPData, GLYCData, GLYXData,
-    H2O2Data, HACData, HBrData, HC5AData, HClData, HCOOHData, HIData, HMHPData,
-    HMMLData, HNO3Data, HOBrData, HOClData, HOIData, HONITData, HPALD1Data,
-    HPALD2Data, HPALD3Data, HPALD4Data, HPETHNLData, I2Data, I2O2Data,
-    I2O3Data, I2O4Data, IBrData, ICHEData, IClData, ICNData, ICPDHData,
-    IDCData, IDCHPData, IDHDPData, IDHPEData, IDNData, IEPOXAData, IEPOXBData,
-    IEPOXDData, IHN1Data, IHN2Data, IHN3Data, IHN4Data, INPBData, INPDData,
-    IONOData, IONO2Data, IPRNO3Data, ITCNData, ITHNData, LIMOData, LVOCData,
-    MACRData, MACR1OOHData, MAPData, MCRDHData, MCRENOLData, MCRHNData,
-    MCRHNBData, MCRHPData, MCTData, MENO3Data, MGLYData, MOHData, MONITSData,
-    MONITUData, MPANData, MTPAData, MTPOData, MVKData, MVKDHData, MVKHCData,
-    MVKHCBData, MVKHPData, MVKNData, MVKPCData, N2O5Data, NO2Data, NPHENData,
-    NPRNO3Data, O3Data, PANData, PHENData, PPData, PPNData, PROPNNData,
-    PRPNData, PYACData, R4N2Data, R4PData, RA3PData, RB3PData, RIPAData,
-    RIPBData, RIPCData, RIPDData, RPData, SO2Data, RCOOHData,
-)::NTuple{132, GasData}
-
-const _SPECIES_FLAGS = ntuple(132) do i
-    (i == 131, i == 114) # (isSO2, isO3)
-end::NTuple{132, Tuple{Bool, Bool}}
-
-@assert length(_SPECIES_DATA) == 132
-@assert length(_SPECIES_FLAGS) == 132
-@assert _SPECIES_DATA[131] === SO2Data
-@assert _SPECIES_DATA[114] === O3Data
-@assert _SPECIES_FLAGS[131] === (true, false)
-@assert _SPECIES_FLAGS[114] === (false, true)
-
-function WesleyRc_byspecies(
-        species_idx::Int,
-        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11,
-        G, Ts, θ, iSeason, rain::Bool, dew::Bool,
-    )
-    @inbounds gasData = _SPECIES_DATA[species_idx]
-    @inbounds isSO2, isO3 = _SPECIES_FLAGS[species_idx]
-    fs = (f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11)
-    inv_Rc = 0.0
-    @inbounds for i in 1:11
-        rc_i = WesleySurfaceResistance(
-            gasData, G, Ts, θ, iSeason, i, rain, dew, isSO2, isO3,
-        )
-        inv_Rc += fs[i] / rc_i
-    end
-    return 1.0 / inv_Rc
-end
-
-@register_symbolic WesleyRc_byspecies(
-    species_idx::Int,
-    f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11,
-    G, Ts, θ, iSeason, rain::Bool, dew::Bool,
-)
-
-function WesleyRc_byspecies(
-        species_idx::Any,
-        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11,
-        G::DynamicQuantities.Quantity, Ts::DynamicQuantities.Quantity,
-        args...,
-    )
-    1.0
-end
-
-ModelingToolkit.get_unit(::typeof(WesleyRc_byspecies)) = 1.0
-=#
