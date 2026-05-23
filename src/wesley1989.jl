@@ -240,23 +240,20 @@ const RPData = GasData(2.236236775, 294.0, 1.0)
 const SO2Data = GasData(1.885407166, 100000.0, 0.0)
 const RCOOHData = GasData(2.027959554, 1520.0, 1.0)
 
-# Look up a Wesely table entry. Both `iSeason` (1..5) and `iLandUse` (1..11)
-# arrive as concrete Ints at trace time (the `for i in 1:11` loop inside
-# `FractionalWesleyRc` is unrolled by MTK when traced symbolically). Direct
-# array indexing is therefore correct, ~333× faster than the previous
-# `DataInterpolations.LinearInterpolation(...)` (1.2 ns vs 401 ns), and
-# allocation-free.
-#
-# Also fixes a silent boundary bug in the previous version: the LinearInterpolation
-# with `ExtrapolationType.Constant` returned 0.0 instead of `matrix[5, 11]` (the
-# last linear index, length-55), which had been quietly zeroing the rocky-shrubs
-# stomatal resistance in transitional season for every fractional run.
-#
-# Note: if the commented-out scalar `DryDepGas` is ever revived, it will need
-# a symbolic-friendly fallback re-introduced here (the previous interpolator
-# body, callable with `Num`/symbolic indices).
-@inline function obtain_value(iSeason, iLandUse, matrix)
-    @inbounds matrix[Int(iSeason), Int(iLandUse)]
+# Look up a Wesely table entry. `iSeason` arrives as a symbolic `Num` (it's
+# a system parameter bound by the GEOS-FP coupler to `season_at(t)`), while
+# `iLandUse` arrives as a concrete `Int` (1..11) from the unrolled
+# `FractionalWesleyRc` loop. Direct `matrix[Int(iSeason), Int(iLandUse)]`
+# would crash with `MethodError: no method matching Int64(::Num)` at trace
+# time, so we use `LinearInterpolation` over the linearized matrix — it
+# has symbolic-arg dispatch and falls through to plain numeric indexing
+# at runtime. Pattern carried over from the working e3e45c56 / eeac9268
+# versions.
+function obtain_value(iSeason, iLandUse, matrix)
+    index = (iLandUse - 1) * 5 + iSeason
+    interp = DataInterpolations.LinearInterpolation(vec(matrix), 1:55;
+        extrapolation = DataInterpolations.ExtrapolationType.Constant)
+    return interp(index)
 end
 
 # Calculate bulk canopy stomatal resistance [s m-1] based on Wesely (1989) equation 3 when given the solar irradiation (G [W m-2]), the surface air temperature (Ts [°C]), the season index (iSeason), the land use index (iLandUse), and whether there is currently rain or dew.
