@@ -58,10 +58,12 @@ end
 =#
 
 # Gas dry deposition (fractional / mosaic — the only gas variant) bound to
-# GEOS-FP. Binds surface meteorology plus `lon`/`lat` (used by the system's
-# 11 `f_*` variables via `landuse_frac_at(lon, lat, i)`) and a date-driven
-# `season`. Dispatches on `DryDepositionGasCoupler` so existing chemistry
-# couplers in `ext/GasChemExt.jl` apply unchanged.
+# GEOS-FP. Binds surface meteorology, a date-driven `season`, and the 11
+# land-use area fractions. The fractions are computed natively from the
+# bundled CONUS NetCDF via `landuse_frac_at(gp.lon, gp.lat, i)` — one
+# lookup per fraction per cell per RHS, shared across all 132 species.
+# Dispatches on `DryDepositionGasCoupler` so existing chemistry couplers
+# in `ext/GasChemExt.jl` apply unchanged.
 function EarthSciMLBase.couple2(
         d::AtmosphericDeposition.DryDepositionGasCoupler,
         gp::EarthSciData.GEOSFPCoupler
@@ -70,7 +72,10 @@ function EarthSciMLBase.couple2(
 
     d = param_to_var(d,
         :Ts, :z, :del_P, :z₀, :u_star, :G, :ρA, :L, :lev,
-        :lon, :lat, :season,
+        :season,
+        :f_urban, :f_agricultural, :f_range, :f_deciduous, :f_coniferous,
+        :f_mixedforest, :f_water, :f_barren, :f_wetland, :f_rangeag,
+        :f_rockyshrubs,
     )
 
     return ConnectorSystem(
@@ -84,9 +89,18 @@ function EarthSciMLBase.couple2(
             d.ρA ~ air_density(gp.P, gp.I3₊T),
             d.L ~ MoninObhukovLength(d.ρA, gp.A1₊TS, gp.A1₊USTAR, gp.A1₊HFLUX),
             d.lev ~ gp.lev,
-            d.lon ~ gp.lon,
-            d.lat ~ gp.lat,
             d.season ~ AtmosphericDeposition.season_at(gp.t_ref + t),
+            d.f_urban        ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 1),
+            d.f_agricultural ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 2),
+            d.f_range        ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 3),
+            d.f_deciduous    ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 4),
+            d.f_coniferous   ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 5),
+            d.f_mixedforest  ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 6),
+            d.f_water        ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 7),
+            d.f_barren       ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 8),
+            d.f_wetland      ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 9),
+            d.f_rangeag      ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 10),
+            d.f_rockyshrubs  ~ AtmosphericDeposition.landuse_frac_at(gp.lon, gp.lat, 11),
         ],
         d,
         gp,

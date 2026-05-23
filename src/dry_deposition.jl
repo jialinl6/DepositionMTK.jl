@@ -1128,14 +1128,15 @@ function DryDepGasFractional(
     return i / (Ra + Rb + Rc)
 end
 
-# Variant B species-keyed method. Identical Vd formula as the GasData
-# overload above, but the Rc branch goes through the 9-arg registered
-# `WesleyRc_byspecies` leaf, which internally looks up GasData / isSO2 /
-# isO3 from the const `_SPECIES_DATA` / `_SPECIES_FLAGS` tables and runs
-# the 11-class loop natively. Sc/Rb still need `gasData.Dh2oPerDx`, so we
-# do one const-table lookup here (cheap and native — not a symbolic call).
+# Reverted: the species-keyed overload below is no longer used. The
+# `GasData` overload above (called per element of the `datas` vector in
+# `DryDepositionGasFractional`) is the active path. Kept commented out
+# for archaeology; see [[code_removal]] memory.
+#=
 function DryDepGasFractional(
-        lev, z, z₀, u_star, L, ρA, species_idx::Int, lon, lat,
+        lev, z, z₀, u_star, L, ρA, species_idx::Int,
+        f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
+        f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
         G, Ts, θ, iwesleySeason, rain::Bool, dew::Bool,
     )
     @inbounds gasData = _SPECIES_DATA[species_idx]
@@ -1146,7 +1147,8 @@ function DryDepGasFractional(
     Rb = RbGas(Sc, u_star)
     Rc = WesleyRc_byspecies(
         species_idx,
-        lon, lat,
+        f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
+        f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
         G * G_unitless,
         (Ts * T_unitless - 273),
         θ,
@@ -1156,6 +1158,7 @@ function DryDepGasFractional(
     i = ifelse(lev == 1, 1, 0)
     return i / (Ra + Rb + Rc)
 end
+=#
 
 """
 Dry deposition (gas) using fractional / mosaic land-use weighting. Drop-in
@@ -1183,8 +1186,6 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
     dew = false
     params = @parameters begin
         season=Int(wesleyMidsummer), [description = "Index for season from Wesley (1989)"]
-        lon=0.0, [unit = u"rad", description = "Longitude"]
-        lat=0.0, [unit = u"rad", description = "Latitude"]
         z=60, [unit = u"m", description = "Height from the ground to the mid-point of level 1"]
         del_P=1520, [unit = u"Pa", description = "Pressure thinkness of level 1"]
         z₀=0.04, [unit = u"m", description = "Roughness length"]
@@ -1195,31 +1196,22 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
         Ts=298, [unit = u"K", description = "Surface air temperature"]
         θ=0, [description = "Slope of the local terrain, in unit radians"]
         lev=1, [description = "Level of the atmospheric layer"]
-    end
-
-    fractions = @variables begin
-        f_urban(t),
-            [description = "Area fraction of Wesely class 1 (urban)"]
-        f_agricultural(t),
-            [description = "Area fraction of Wesely class 2 (agricultural)"]
-        f_range(t),
-            [description = "Area fraction of Wesely class 3 (range)"]
-        f_deciduous(t),
-            [description = "Area fraction of Wesely class 4 (deciduous forest)"]
-        f_coniferous(t),
-            [description = "Area fraction of Wesely class 5 (coniferous forest)"]
-        f_mixedforest(t),
-            [description = "Area fraction of Wesely class 6 (mixed forest)"]
-        f_water(t),
-            [description = "Area fraction of Wesely class 7 (water)"]
-        f_barren(t),
-            [description = "Area fraction of Wesely class 8 (barren)"]
-        f_wetland(t),
-            [description = "Area fraction of Wesely class 9 (nonforested wetland)"]
-        f_rangeag(t),
-            [description = "Area fraction of Wesely class 10 (mixed range/agricultural)"]
-        f_rockyshrubs(t),
-            [description = "Area fraction of Wesely class 11 (rocky shrubs)"]
+        # 11 land-use area fractions — set per cell by the coupler (e.g.
+        # `couple2(::DryDepositionGasCoupler, ::GEOSFPCoupler)` binds
+        # each `f_*` to `landuse_frac_at(lon, lat, i)`). Default values
+        # mirror the previous `landuse_frac_at` stub (vegetated-land
+        # fallback: f_mixedforest = 1.0, others = 0.0).
+        f_urban=0.0,        [description = "Area fraction of Wesely class 1 (urban)"]
+        f_agricultural=0.0, [description = "Area fraction of Wesely class 2 (agricultural)"]
+        f_range=0.0,        [description = "Area fraction of Wesely class 3 (range)"]
+        f_deciduous=0.0,    [description = "Area fraction of Wesely class 4 (deciduous forest)"]
+        f_coniferous=0.0,   [description = "Area fraction of Wesely class 5 (coniferous forest)"]
+        f_mixedforest=1.0,  [description = "Area fraction of Wesely class 6 (mixed forest)"]
+        f_water=0.0,        [description = "Area fraction of Wesely class 7 (water)"]
+        f_barren=0.0,       [description = "Area fraction of Wesely class 8 (barren)"]
+        f_wetland=0.0,      [description = "Area fraction of Wesely class 9 (nonforested wetland)"]
+        f_rangeag=0.0,      [description = "Area fraction of Wesely class 10 (mixed range/agricultural)"]
+        f_rockyshrubs=0.0,  [description = "Area fraction of Wesely class 11 (rocky shrubs)"]
     end
 
     depvel = @variables begin
@@ -1762,13 +1754,12 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
         k_RCOOH(t), [unit = u"1/s", description = "> C2 organic acids dry deposition rate"]
     end
 
-    # Variant B: `datas` / `isSO2` / `isO3` vectors are no longer broadcast
-    # into the RHS — they live behind the registered `WesleyRc_byspecies`
-    # leaf as `_SPECIES_DATA` / `_SPECIES_FLAGS` consts in `wesley1989.jl`.
-    # The broadcast below is now keyed by `1:132` species indices instead.
-    # The const tuple in wesley1989.jl is asserted at module-init to match
-    # this ordering exactly.
-    #=
+    # Per-species `GasData` table, mirroring the scalar `DryDepositionGas`
+    # constructor exactly. Broadcasting `DryDepGasFractional.(..., datas,
+    # ..., isSO2, isO3)` picks one `GasData` (and the matching SO2/O3 flag)
+    # per equation. `FractionalWesleyRc` is registered (one boundary
+    # crossing per species per cell) and does the 11-class loop natively
+    # behind the boundary.
     datas = [
         NoData,
         AldData,
@@ -1908,39 +1899,18 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
     isSO2[131] = true
     isO3 = repeat([false], size(datas)[1])
     isO3[114] = true
-    =#
 
-    # `frac_eqs` is preserved as inspection-only diagnostics: the 11 `f_*`
-    # variables are exposed as system unknowns (the constructor test in
-    # `test/fractional_test.jl` asserts this), but they no longer feed
-    # into the deposition RHS — `WesleyRc_byspecies` looks fractions up
-    # itself from (lon, lat). `structural_simplify` will likely keep them
-    # as observed since nothing else consumes them.
-    frac_eqs = [
-        f_urban        ~ landuse_frac_at(lon, lat, 1),
-        f_agricultural ~ landuse_frac_at(lon, lat, 2),
-        f_range        ~ landuse_frac_at(lon, lat, 3),
-        f_deciduous    ~ landuse_frac_at(lon, lat, 4),
-        f_coniferous   ~ landuse_frac_at(lon, lat, 5),
-        f_mixedforest  ~ landuse_frac_at(lon, lat, 6),
-        f_water        ~ landuse_frac_at(lon, lat, 7),
-        f_barren       ~ landuse_frac_at(lon, lat, 8),
-        f_wetland      ~ landuse_frac_at(lon, lat, 9),
-        f_rangeag      ~ landuse_frac_at(lon, lat, 10),
-        f_rockyshrubs  ~ landuse_frac_at(lon, lat, 11),
-    ]
+    # No `frac_eqs`: the 11 `f_*` are ordinary scalar parameters set per
+    # cell by the coupler (one `landuse_frac_at` lookup per fraction per
+    # cell per RHS, shared across all 132 species). System unknowns are
+    # only `v_*` / `k_*`, matching the scalar `DryDepositionGas` shape.
 
-    # Variant B broadcast: 132 calls, each carrying 15 args (vs. the
-    # previous 25-arg / 16-symbolic-arg broadcast). The 9-arg
-    # `WesleyRc_byspecies` is the symbolic leaf; `DryDepGasFractional`
-    # below is plain Julia that traces through to inline Ra/Rb and wrap
-    # the registered Rc call.
-    species_idx = 1:132
     eqs = [
-        frac_eqs;
         depvel .~ DryDepGasFractional.(
-            lev, z, z₀, u_star, L, ρA, species_idx, lon, lat,
-            G, Ts, θ, season, rain, dew,
+            lev, z, z₀, u_star, L, ρA, datas, G, Ts, θ, season,
+            f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
+            f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
+            rain, dew, isSO2, isO3,
         );
         deprate .~ depvel .* g .* ρA ./ del_P
     ]

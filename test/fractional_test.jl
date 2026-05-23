@@ -155,6 +155,8 @@ end
     @parameters iSeason, lev
 
     # Concrete fractions: f_mixedforest = 1.0, others = 0.0.
+    # GasData overload — this is the active path used by the
+    # `DryDepositionGasFractional` broadcast (via `datas = [...]`).
     @test ModelingToolkit.get_unit(
         DryDepGasFractional(
             lev, z, z₀, u_star, L, ρA,
@@ -171,17 +173,21 @@ end
 
     @test sys isa ModelingToolkit.AbstractSystem
 
-    # Should expose the 11 fraction variables as unknowns.
-    var_str = string.(unknowns(sys))
-    @test any(contains.(var_str, "f_urban"))
-    @test any(contains.(var_str, "f_agricultural"))
-    @test any(contains.(var_str, "f_mixedforest"))
-    @test any(contains.(var_str, "f_rockyshrubs"))
-
-    # Should have lon, lat, season as parameters; NOT landuse (the old scalar).
+    # Fractions are now ordinary parameters (set per cell by the coupler),
+    # not system unknowns. This matches the scalar-landuse baseline's
+    # symbolic shape: only v_* / k_* are unknowns; everything else is a
+    # parameter. lon/lat live on the GEOS-FP side and aren't dep-system
+    # parameters anymore.
     param_str = string.(parameters(sys))
-    @test any(contains.(param_str, "lon"))
-    @test any(contains.(param_str, "lat"))
+    @test any(contains.(param_str, "f_urban"))
+    @test any(contains.(param_str, "f_agricultural"))
+    @test any(contains.(param_str, "f_mixedforest"))
+    @test any(contains.(param_str, "f_rockyshrubs"))
     @test any(contains.(param_str, "season"))
     @test !any(contains.(param_str, "landuse"))
+    @test !any(contains.(param_str, "lon"))
+    @test !any(contains.(param_str, "lat"))
+
+    var_str = string.(unknowns(sys))
+    @test !any(contains.(var_str, "f_urban"))
 end
