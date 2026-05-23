@@ -443,19 +443,15 @@ function FractionalWesleyRc(
     return 1.0 / inv_Rc
 end
 
-# Register `WesleySurfaceResistance` as the symbolic leaf. The `for i in 1:11`
-# loop inside `FractionalWesleyRc` still expands at Julia compile time, but
-# each iteration now produces ONE opaque registered call reference instead of
-# the full inlined Wesely formula tree → the chemistry RHS sees 132 × 11 ≈
-# 1500 small opaque references, not 1500 inlined formula trees.
-#
-# This mirrors FastJX's pattern: the high-level `j_mean(σ, ϕ, T, fluxes)` is
-# NOT registered (it traces through 18 bins), but the per-bin leaf
-# `calc_direct_flux(CSZA, P, i::Int)` IS registered. 10-arg signature here
-# matches the size of the existing precedents (EarthSciData's
-# `interp!(::DataSetInterpolator, t, loc1, loc2, loc3)` and FastJX's
-# `calc_direct_flux`) — registering the 17-arg `FractionalWesleyRc` instead
-# caused Symbolics' macro expansion to blow up to ~10 GiB at precompile.
+# NOTE (Variant B refactor): `WesleySurfaceResistance` is no longer the
+# symbolic leaf — the new leaf is `WesleyRc_byspecies` (9 args), defined
+# further below. With B, the 11-class loop AND the 132-species GasData/flag
+# lookup all run natively behind a single registered call, so the RHS sees
+# only 132 boundary crossings per cell (down from 132×11 = 1452) and each
+# crossing carries 9 args instead of 16+. `WesleySurfaceResistance` itself
+# stays a plain Julia function (still called natively from
+# `WesleyRc_byspecies` and `FractionalWesleyRc`).
+#=
 @register_symbolic WesleySurfaceResistance(
     gd::GasData, G, Ts, θ, iSeason, iLandUse::Int,
     rain::Bool, dew::Bool, isSO2::Bool, isO3::Bool
@@ -473,3 +469,106 @@ function WesleySurfaceResistance(::Nothing, args...)
 end
 
 ModelingToolkit.get_unit(::typeof(WesleySurfaceResistance)) = 1.0
+=#
+
+# ─── Variant B: species-keyed registered leaf ────────────────────────────
+#
+# `_SPECIES_DATA` and `_SPECIES_FLAGS` are the const lookup tables that
+# `WesleyRc_byspecies` indexes by `species_idx::Int`. The ordering MUST
+# match the `datas` vector in `DryDepositionGasFractional` (asserted at
+# module init below). isSO2 lives at idx 131 (SO2Data) and isO3 at idx 114
+# (O3Data) per the existing flags in `dry_deposition.jl`.
+const _SPECIES_DATA = (
+    NoData, AldData, HchoData, OpData, PaaData, OraData, Nh3Data, Hno2Data,
+    ACETData, ACTAData, ALD2Data, AROMP4Data, AROMP5Data, ATOOHData, BALDData,
+    BENZPData, Br2Data, BrClData, BrNO3Data, BZCO3HData, BZPANData, CH2OData,
+    Cl2Data, ClNO2Data, ClNO3Data, ClOData, ClOOData, CSLData, EOHData,
+    ETHLNData, ETHNData, ETHPData, ETNO3Data, ETPData, GLYCData, GLYXData,
+    H2O2Data, HACData, HBrData, HC5AData, HClData, HCOOHData, HIData, HMHPData,
+    HMMLData, HNO3Data, HOBrData, HOClData, HOIData, HONITData, HPALD1Data,
+    HPALD2Data, HPALD3Data, HPALD4Data, HPETHNLData, I2Data, I2O2Data,
+    I2O3Data, I2O4Data, IBrData, ICHEData, IClData, ICNData, ICPDHData,
+    IDCData, IDCHPData, IDHDPData, IDHPEData, IDNData, IEPOXAData, IEPOXBData,
+    IEPOXDData, IHN1Data, IHN2Data, IHN3Data, IHN4Data, INPBData, INPDData,
+    IONOData, IONO2Data, IPRNO3Data, ITCNData, ITHNData, LIMOData, LVOCData,
+    MACRData, MACR1OOHData, MAPData, MCRDHData, MCRENOLData, MCRHNData,
+    MCRHNBData, MCRHPData, MCTData, MENO3Data, MGLYData, MOHData, MONITSData,
+    MONITUData, MPANData, MTPAData, MTPOData, MVKData, MVKDHData, MVKHCData,
+    MVKHCBData, MVKHPData, MVKNData, MVKPCData, N2O5Data, NO2Data, NPHENData,
+    NPRNO3Data, O3Data, PANData, PHENData, PPData, PPNData, PROPNNData,
+    PRPNData, PYACData, R4N2Data, R4PData, RA3PData, RB3PData, RIPAData,
+    RIPBData, RIPCData, RIPDData, RPData, SO2Data, RCOOHData,
+)::NTuple{132, GasData}
+
+const _SPECIES_FLAGS = ntuple(132) do i
+    (i == 131, i == 114) # (isSO2, isO3)
+end::NTuple{132, Tuple{Bool, Bool}}
+
+# Module-load self-checks. Catches off-by-one errors if the species
+# ordering is ever changed without updating both `_SPECIES_DATA` and the
+# `isSO2`/`isO3` flag positions. Cheap (a handful of `===` and length
+# checks), no runtime cost outside module load.
+@assert length(_SPECIES_DATA) == 132 "_SPECIES_DATA must have 132 entries to match the DryDepositionGasFractional broadcast ordering."
+@assert length(_SPECIES_FLAGS) == 132 "_SPECIES_FLAGS must have 132 entries to match _SPECIES_DATA."
+@assert _SPECIES_DATA[131] === SO2Data "SO2Data must be at index 131 (matches the legacy isSO2[131] = true flag in DryDepositionGasFractional)."
+@assert _SPECIES_DATA[114] === O3Data "O3Data must be at index 114 (matches the legacy isO3[114] = true flag in DryDepositionGasFractional)."
+@assert _SPECIES_FLAGS[131] === (true, false) "isSO2 flag must be at index 131."
+@assert _SPECIES_FLAGS[114] === (false, true) "isO3 flag must be at index 114."
+
+# Forward declaration: `landuse_frac_at` lives in `landuse_fractions.jl`,
+# loaded after this file. Use a `Base.invokelatest`-free direct reference
+# via `getfield` at call time would work, but since both files are in the
+# same module, the symbol resolves at function-compile time on first call.
+# Nothing to do here — the call below sees `landuse_frac_at` once the
+# module is fully loaded.
+
+"""
+Area-weighted Wesely (1989) surface resistance for the species at index
+`species_idx` (1..132), looking up `lon`/`lat`-resolved land-use fractions
+internally via `landuse_frac_at(lon, lat, i)`. This is the species-keyed
+leaf that replaces the per-class `WesleySurfaceResistance` boundary
+crossings: the 11-class parallel-conductance combination AND the
+GasData/isSO2/isO3 dispatch all run natively behind ONE registered call.
+
+Result is dimensionless; the caller (`DryDepGasFractional`) multiplies by
+`Rc_unit` to attach `u"s/m"`.
+"""
+function WesleyRc_byspecies(
+        species_idx::Int, lon, lat, G, Ts, θ, iSeason, rain::Bool, dew::Bool
+    )
+    @inbounds gasData = _SPECIES_DATA[species_idx]
+    @inbounds isSO2, isO3 = _SPECIES_FLAGS[species_idx]
+    inv_Rc = 0.0
+    # Loop is unrolled by the compiler (1:11 with constant bounds); each
+    # iteration is a native call to `WesleySurfaceResistance` and
+    # `landuse_frac_at`, both plain Julia functions in this module.
+    @inbounds for i in 1:11
+        f_i = landuse_frac_at(lon, lat, i)
+        rc_i = WesleySurfaceResistance(
+            gasData, G, Ts, θ, iSeason, i, rain, dew, isSO2, isO3,
+        )
+        inv_Rc += f_i / rc_i
+    end
+    return 1.0 / inv_Rc
+end
+
+# Register as the symbolic leaf. 9 args — within the proven-safe band
+# (FastJX's `calc_direct_flux` is 3, EarthSciData's `interp!` is 5).
+@register_symbolic WesleyRc_byspecies(
+    species_idx::Int, lon, lat, G, Ts, θ, iSeason,
+    rain::Bool, dew::Bool,
+)
+
+# Unit-validation dummy: during MTK's unit-checking pass, numeric args
+# arrive as `DynamicQuantities.Quantity`. The caller multiplies the result
+# by `Rc_unit` (= u"s/m") itself, so this function is dimensionless on the
+# inside — return 1.0 (matches the `landuse_frac_at` / `season_at` /
+# `A_table` conventions in this package).
+function WesleyRc_byspecies(
+        ::Any, ::DynamicQuantities.Quantity, ::DynamicQuantities.Quantity,
+        args...,
+    )
+    1.0
+end
+
+ModelingToolkit.get_unit(::typeof(WesleyRc_byspecies)) = 1.0

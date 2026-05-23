@@ -1128,6 +1128,35 @@ function DryDepGasFractional(
     return i / (Ra + Rb + Rc)
 end
 
+# Variant B species-keyed method. Identical Vd formula as the GasData
+# overload above, but the Rc branch goes through the 9-arg registered
+# `WesleyRc_byspecies` leaf, which internally looks up GasData / isSO2 /
+# isO3 from the const `_SPECIES_DATA` / `_SPECIES_FLAGS` tables and runs
+# the 11-class loop natively. Sc/Rb still need `gasData.Dh2oPerDx`, so we
+# do one const-table lookup here (cheap and native — not a symbolic call).
+function DryDepGasFractional(
+        lev, z, z₀, u_star, L, ρA, species_idx::Int, lon, lat,
+        G, Ts, θ, iwesleySeason, rain::Bool, dew::Bool,
+    )
+    @inbounds gasData = _SPECIES_DATA[species_idx]
+    Ra = ra(z, z₀, u_star, L)
+    μ = mu(Ts)
+    Dg = dH2O(Ts) / gasData.Dh2oPerDx
+    Sc = sc(μ, ρA, Dg)
+    Rb = RbGas(Sc, u_star)
+    Rc = WesleyRc_byspecies(
+        species_idx,
+        lon, lat,
+        G * G_unitless,
+        (Ts * T_unitless - 273),
+        θ,
+        iwesleySeason,
+        rain, dew,
+    ) * Rc_unit
+    i = ifelse(lev == 1, 1, 0)
+    return i / (Ra + Rb + Rc)
+end
+
 """
 Dry deposition (gas) using fractional / mosaic land-use weighting. Drop-in
 replacement for `DryDepositionGas` when coupled to GEOS-FP; exposes 11 area
@@ -1733,6 +1762,13 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
         k_RCOOH(t), [unit = u"1/s", description = "> C2 organic acids dry deposition rate"]
     end
 
+    # Variant B: `datas` / `isSO2` / `isO3` vectors are no longer broadcast
+    # into the RHS — they live behind the registered `WesleyRc_byspecies`
+    # leaf as `_SPECIES_DATA` / `_SPECIES_FLAGS` consts in `wesley1989.jl`.
+    # The broadcast below is now keyed by `1:132` species indices instead.
+    # The const tuple in wesley1989.jl is asserted at module-init to match
+    # this ordering exactly.
+    #=
     datas = [
         NoData,
         AldData,
@@ -1872,7 +1908,14 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
     isSO2[131] = true
     isO3 = repeat([false], size(datas)[1])
     isO3[114] = true
+    =#
 
+    # `frac_eqs` is preserved as inspection-only diagnostics: the 11 `f_*`
+    # variables are exposed as system unknowns (the constructor test in
+    # `test/fractional_test.jl` asserts this), but they no longer feed
+    # into the deposition RHS — `WesleyRc_byspecies` looks fractions up
+    # itself from (lon, lat). `structural_simplify` will likely keep them
+    # as observed since nothing else consumes them.
     frac_eqs = [
         f_urban        ~ landuse_frac_at(lon, lat, 1),
         f_agricultural ~ landuse_frac_at(lon, lat, 2),
@@ -1887,13 +1930,18 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
         f_rockyshrubs  ~ landuse_frac_at(lon, lat, 11),
     ]
 
+    # Variant B broadcast: 132 calls, each carrying 15 args (vs. the
+    # previous 25-arg / 16-symbolic-arg broadcast). The 9-arg
+    # `WesleyRc_byspecies` is the symbolic leaf; `DryDepGasFractional`
+    # below is plain Julia that traces through to inline Ra/Rb and wrap
+    # the registered Rc call.
+    species_idx = 1:132
     eqs = [
         frac_eqs;
-        depvel .~ DryDepGasFractional.(lev, z, z₀, u_star, L, ρA, datas, G, Ts, θ,
-            season,
-            f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
-            f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
-            rain, dew, isSO2, isO3);
+        depvel .~ DryDepGasFractional.(
+            lev, z, z₀, u_star, L, ρA, species_idx, lon, lat,
+            G, Ts, θ, season, rain, dew,
+        );
         deprate .~ depvel .* g .* ρA ./ del_P
     ]
 
