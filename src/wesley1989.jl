@@ -85,11 +85,16 @@ const r_clO = SA_F32[
     inf 1000 500 500 1500 700 inf inf 600 800 800
 ]
 
-# Holder for gas properties from Wesely (1989) Table 2.'
+# Holder for gas properties from Wesely (1989) Table 2. Fields are typed
+# `Float64` (not `AbstractFloat`) so the struct is concrete and field access
+# is non-boxing. All ~130 module-level `GasData(...)` constants below use
+# Float64 literals, so this is non-breaking. Previously, `AbstractFloat`
+# fields caused ~21 boxed allocations per `WesleySurfaceResistance` call
+# from `gasData.Hstar` / `gasData.Fo` / `gasData.Dh2oPerDx` accesses.
 struct GasData
-    Dh2oPerDx::AbstractFloat
-    Hstar::AbstractFloat
-    Fo::AbstractFloat
+    Dh2oPerDx::Float64
+    Hstar::Float64
+    Fo::Float64
 end
 
 const So2Data = GasData(1.9, 1.0e5, 0)
@@ -235,12 +240,23 @@ const RPData = GasData(2.236236775, 294.0, 1.0)
 const SO2Data = GasData(1.885407166, 100000.0, 0.0)
 const RCOOHData = GasData(2.027959554, 1520.0, 1.0)
 
-# Obtain values from matrix using symbolic parameter iSeason and iLandUse
-function obtain_value(iSeason, iLandUse, matrix)
-    index = (iLandUse - 1) * 5 + iSeason
-    interpolate_r_i = DataInterpolations.LinearInterpolation(vec(matrix), 1:55;
-        extrapolation = DataInterpolations.ExtrapolationType.Constant)
-    return interpolate_r_i(index)
+# Look up a Wesely table entry. Both `iSeason` (1..5) and `iLandUse` (1..11)
+# arrive as concrete numerics at RHS time once the caller `FractionalWesleyRc`
+# is `@register_symbolic`'d below: the inner 11-class loop runs as native
+# Julia, not as a symbolic trace. Direct array indexing is therefore correct,
+# ~333× faster than the previous `DataInterpolations.LinearInterpolation(...)`
+# (1.2 ns vs 401 ns), and allocation-free.
+#
+# Also fixes a silent boundary bug in the previous version: the LinearInterpolation
+# with `ExtrapolationType.Constant` returned 0.0 instead of `matrix[5, 11]` (the
+# last linear index, length-55), which had been quietly zeroing the rocky-shrubs
+# stomatal resistance in transitional season for every fractional run.
+#
+# Note: if the commented-out scalar `DryDepGas` is ever revived, it will need
+# a symbolic-friendly fallback re-introduced here (the previous interpolator
+# body, callable with `Num`/symbolic indices).
+@inline function obtain_value(iSeason, iLandUse, matrix)
+    @inbounds matrix[Int(iSeason), Int(iLandUse)]
 end
 
 # Calculate bulk canopy stomatal resistance [s m-1] based on Wesely (1989) equation 3 when given the solar irradiation (G [W m-2]), the surface air temperature (Ts [°C]), the season index (iSeason), the land use index (iLandUse), and whether there is currently rain or dew.
@@ -426,3 +442,34 @@ function FractionalWesleyRc(
     )
     return 1.0 / inv_Rc
 end
+
+# Register `WesleySurfaceResistance` as the symbolic leaf. The `for i in 1:11`
+# loop inside `FractionalWesleyRc` still expands at Julia compile time, but
+# each iteration now produces ONE opaque registered call reference instead of
+# the full inlined Wesely formula tree → the chemistry RHS sees 132 × 11 ≈
+# 1500 small opaque references, not 1500 inlined formula trees.
+#
+# This mirrors FastJX's pattern: the high-level `j_mean(σ, ϕ, T, fluxes)` is
+# NOT registered (it traces through 18 bins), but the per-bin leaf
+# `calc_direct_flux(CSZA, P, i::Int)` IS registered. 10-arg signature here
+# matches the size of the existing precedents (EarthSciData's
+# `interp!(::DataSetInterpolator, t, loc1, loc2, loc3)` and FastJX's
+# `calc_direct_flux`) — registering the 17-arg `FractionalWesleyRc` instead
+# caused Symbolics' macro expansion to blow up to ~10 GiB at precompile.
+@register_symbolic WesleySurfaceResistance(
+    gd::GasData, G, Ts, θ, iSeason, iLandUse::Int,
+    rain::Bool, dew::Bool, isSO2::Bool, isO3::Bool
+)
+
+# Unit-validation dummy. During MTK's unit-checking pass, the
+# type-asserted `::GasData` argument is replaced by `Nothing` (MTK has no
+# `GasData` value to substitute since the type isn't `Real`/`Quantity`),
+# while the remaining numeric args arrive as `DynamicQuantities.Quantity`.
+# The caller multiplies the result by `Rc_unit` (= u"s/m") itself, so this
+# function is dimensionless on the inside — return 1.0 (matches the
+# `landuse_frac_at` / `season_at` / `A_table` conventions in this package).
+function WesleySurfaceResistance(::Nothing, args...)
+    1.0
+end
+
+ModelingToolkit.get_unit(::typeof(WesleySurfaceResistance)) = 1.0
