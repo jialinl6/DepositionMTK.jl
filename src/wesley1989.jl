@@ -240,20 +240,75 @@ const RPData = GasData(2.236236775, 294.0, 1.0)
 const SO2Data = GasData(1.885407166, 100000.0, 0.0)
 const RCOOHData = GasData(2.027959554, 1520.0, 1.0)
 
-# Look up a Wesely table entry. `iSeason` arrives as a symbolic `Num` (it's
-# a system parameter bound by the GEOS-FP coupler to `season_at(t)`), while
-# `iLandUse` arrives as a concrete `Int` (1..11) from the unrolled
-# `FractionalWesleyRc` loop. Direct `matrix[Int(iSeason), Int(iLandUse)]`
-# would crash with `MethodError: no method matching Int64(::Num)` at trace
-# time, so we use `LinearInterpolation` over the linearized matrix — it
-# has symbolic-arg dispatch and falls through to plain numeric indexing
-# at runtime. Pattern carried over from the working e3e45c56 / eeac9268
-# versions.
+# Previous `LinearInterpolation`-based lookup. Replaced because Wesely's table
+# indices are CATEGORICAL (5 seasons × 11 land-use classes) — interpolating
+# between them is meaningless, and doing so was also numerically wrong at the
+# last entry.
+#
+# The bug: for `r_i[5,11]` the flat index is `(11-1)*5+5 = 55`, the final node.
+# At interior nodes the interpolator lands exactly on a grid point and returns
+# it, but at the last node it must evaluate the closing segment
+# `u[54] + (u[55]-u[54])` — and `u[54]` is `r_i[4,11] = inf = 1.0e25`. Since
+# `ulp(1e25) ≈ 2.1e9 ≫ 300`, the 300 is annihilated and the result is `0.0`
+# instead of `300.0` (a magnitude problem, not a Float32 one — it happens in
+# Float64 too). `r_i` is the only table with `inf` at `[4,11]`, so exactly 1 of
+# 385 entries was affected.
+#
+# Impact: `r_i = 0` → `r_s = 0` → `rsmx = r_mx` → in the parallel-conductance
+# sum `1/rsmx` swamps every other pathway → `Rc` clamps to its 10 s/m floor →
+# maximum deposition velocity over rocky shrubs in Transitional season
+# (Mar–May). Measured Vd overestimate: O3 4.8×, SO2 3.8×, NO2 10.5×.
+#=
 function obtain_value(iSeason, iLandUse, matrix)
     index = (iLandUse - 1) * 5 + iSeason
     interp = DataInterpolations.LinearInterpolation(vec(matrix), 1:55;
         extrapolation = DataInterpolations.ExtrapolationType.Constant)
     return interp(index)
+end
+=#
+
+# Tables indexed by the `tbl` argument of `wesely_table` below. Order is
+# load-bearing: `obtain_value` maps a matrix to its index by `===`.
+const _WESELY_TABLES = (r_i, r_lu, r_ac, r_gsS, r_gsO, r_clS, r_clO)
+
+"""
+Direct lookup of a Wesely (1989) table entry by (season, land-use) index.
+
+Registered as symbolic because `iSeason` generally arrives as a `Num` (the
+GEOS-FP coupler binds `season` to `season_at(t)`) and `iLandUse` may too (it is
+a plain parameter in the single-class path). Registration is what makes direct
+indexing possible at all: with a symbolic argument the generated method builds
+an opaque `Term` and never enters this body, so `round(Int, …)` only ever runs
+at runtime on concrete values. A plain unregistered `matrix[Int(iSeason), …]`
+fails with `MethodError: Int64(::Num)` at trace time — that is why the earlier
+direct-index version (c9e95605) had to be reverted.
+
+Only TWO untyped arguments: `@register_symbolic`'s expansion grows sharply with
+the number of symbolic args (a 15-arg registration was measured at >8 GiB), so
+`tbl` is typed `::Int` to keep it out of the expansion.
+"""
+function wesely_table(tbl::Int, iSeason, iLandUse)
+    @inbounds Float64(_WESELY_TABLES[tbl][round(Int, iSeason), round(Int, iLandUse)])
+end
+@register_symbolic wesely_table(tbl::Int, iSeason, iLandUse)
+ModelingToolkit.get_unit(::typeof(wesely_table)) = 1.0
+# Unit-validation path: MTK's DynamicQuantities extension probes registered
+# functions by calling them with `Quantity` arguments — for ALL of them,
+# including `tbl`, so a `::Int`-typed fallback is not enough. The table entries
+# are dimensionless here (the caller attaches `Rc_unit`), so return 1.0.
+wesely_table(
+    ::DynamicQuantities.Quantity, ::DynamicQuantities.Quantity,
+    ::DynamicQuantities.Quantity
+) = 1.0
+wesely_table(::Int, ::DynamicQuantities.Quantity, ::Any) = 1.0
+
+# Thin dispatcher preserving the original call signature. The `===` chain
+# resolves at trace time (the tables are `const`), so no call site changes.
+@inline function obtain_value(iSeason, iLandUse, matrix)
+    tbl = matrix === r_i ? 1 : matrix === r_lu ? 2 : matrix === r_ac ? 3 :
+        matrix === r_gsS ? 4 : matrix === r_gsO ? 5 : matrix === r_clS ? 6 :
+        matrix === r_clO ? 7 : error("unknown Wesely table passed to obtain_value")
+    return wesely_table(tbl, iSeason, iLandUse)
 end
 
 # Calculate bulk canopy stomatal resistance [s m-1] based on Wesely (1989) equation 3 when given the solar irradiation (G [W m-2]), the surface air temperature (Ts [°C]), the season index (iSeason), the land use index (iLandUse), and whether there is currently rain or dew.

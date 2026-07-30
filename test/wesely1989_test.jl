@@ -231,3 +231,48 @@ end
         false
     ) ≈ 45.45454545454546
 end
+
+@testitem "obtain_value returns exact table entries" setup = [WeselySetup] begin
+    # Regression guard. `obtain_value` must be an exact categorical lookup:
+    # (iSeason, iLandUse) are class indices, not continuous coordinates, so
+    # every query must reproduce the table entry bit-for-bit.
+    #
+    # This has regressed twice. From 2024-09-06 (46379366) until 2026-05-22 the
+    # lookup flattened the 5×11 table and ran `LinearInterpolation` over the flat
+    # index. That is exact at interior nodes but wrong at the LAST one: for
+    # `r_i[5,11]` the flat index is 55, so the closing segment
+    # `u[54] + (u[55]-u[54])` is evaluated, and `u[54]` is `r_i[4,11] = inf =
+    # 1.0e25`. Since `ulp(1e25) ≈ 2.1e9 ≫ 300`, the 300 is annihilated and the
+    # result was `0.0` instead of `300.0` (a magnitude problem, not a Float32
+    # one — it happens in Float64 too). It was fixed on 2026-05-22 and reverted
+    # a day later by 9f5cebf0.
+    #
+    # Consequence if it regresses: `r_i = 0` → `r_s = 0` → `rsmx = r_mx`, and in
+    # the parallel-conductance sum `1/rsmx` swamps every other pathway, so `Rc`
+    # clamps to its 10 s/m floor and Vd is maximal over rocky shrubs in
+    # Transitional season (Mar–May). Measured Vd overestimate: O3 4.8×, NO2 10.5×.
+    tables = [
+        "r_i" => AtmosphericDeposition.r_i,
+        "r_lu" => AtmosphericDeposition.r_lu,
+        "r_ac" => AtmosphericDeposition.r_ac,
+        "r_gsS" => AtmosphericDeposition.r_gsS,
+        "r_gsO" => AtmosphericDeposition.r_gsO,
+        "r_clS" => AtmosphericDeposition.r_clS,
+        "r_clO" => AtmosphericDeposition.r_clO,
+    ]
+    for (name, m) in tables, iSeason in 1:5, iLandUse in 1:11
+        got = AtmosphericDeposition.obtain_value(iSeason, iLandUse, m)
+        want = Float64(m[iSeason, iLandUse])
+        @test got ≈ want rtol = 1.0e-9
+    end
+
+    # The specific entry that regressed, called out so a failure is unmistakable.
+    @test AtmosphericDeposition.obtain_value(5, 11, AtmosphericDeposition.r_i) ≈ 300.0
+
+    # ...and its physical consequence: Rc must NOT sit on the 10 s/m floor here.
+    rc_o3 = WesleySurfaceResistance(
+        AtmosphericDeposition.O3Data, 800.0, 20.0, 0.0, 5, 11,
+        false, false, false, true
+    )
+    @test rc_o3 > 100.0
+end
