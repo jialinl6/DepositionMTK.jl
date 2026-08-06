@@ -232,6 +232,21 @@ end
     ) ≈ 45.45454545454546
 end
 
+@testitem "r_s closes stomata outside 0.1-39.9 degC" setup = [WeselySetup] begin
+    # Wesely (1989) eq. 3 is only defined for 0 < Ts < 40 degC.
+    for Ts in (-5.0, 0.0, 40.5, 45.0, 55.0)
+        @test AtmosphericDeposition.r_s(300.0, Ts, 1, 6, false) == AtmosphericDeposition.inf
+    end
+    @test AtmosphericDeposition.r_s(300.0, 20.0, 1, 6, false) < 1.0e3
+
+    # Rc must stay in a physical range rather than hitting either clamp.
+    for Ts in (45.0, 55.0)
+        rc = WesleySurfaceResistance(
+            AtmosphericDeposition.O3Data, 300.0, Ts, 0.0, 1, 6, false, false, false, true)
+        @test 100.0 < rc < 9999.0
+    end
+end
+
 @testitem "obtain_value returns exact table entries" setup = [WeselySetup] begin
     # Regression guard. `obtain_value` must be an exact categorical lookup:
     # (iSeason, iLandUse) are class indices, not continuous coordinates, so
