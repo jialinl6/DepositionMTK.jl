@@ -981,12 +981,10 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
         k_RCOOH(t), [unit = u"1/s", description = "> C2 organic acids dry deposition rate"]
     end
 
-    # Per-species `GasData` table, mirroring the scalar `DryDepositionGas`
-    # constructor exactly. Broadcasting `DryDepGasFractional.(..., datas,
-    # ..., isSO2, isO3)` picks one `GasData` (and the matching SO2/O3 flag)
-    # per equation. `FractionalWesleyRc` is registered (one boundary
-    # crossing per species per cell) and does the 11-class loop natively
-    # behind the boundary.
+    # Per-species `GasData` table. Broadcasting `DryDepGasFractional.(...,
+    # datas, ..., isSO2, isO3)` picks one `GasData` (and the matching SO2/O3
+    # flag) per equation. `FractionalWesleyRc` is NOT registered, so its
+    # 11-class loop is traced symbolically into every species' equation.
     datas = [
         NoData,
         AldData,

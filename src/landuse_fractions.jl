@@ -113,9 +113,10 @@ ModelingToolkit.get_unit(::typeof(landuse_frac_at)) = 1.0
 #   Dec–Feb → 4 (Winter)
 #   Mar–May → 5 (Transitional)
 #
-# Called from `couple2(::DryDepositionGasFractionalCoupler, ::GEOSFPCoupler)`
-# as `season_at(gp.t_ref + t)`. For Southern-Hemisphere or tropical work,
-# override `season` manually instead of binding to this function.
+# Called from `couple2(::DryDepositionGasCoupler, ::GEOSFPCoupler)` in
+# `ext/EarthSciDataExt.jl` as `season_at(gp.t_ref + t)`. For
+# Southern-Hemisphere or tropical work, override `season` manually instead of
+# binding to this function.
 #
 # TODO: lat-aware seasons for global use.
 function season_at(t_abs_seconds)

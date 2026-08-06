@@ -240,33 +240,6 @@ const RPData = GasData(2.236236775, 294.0, 1.0)
 const SO2Data = GasData(1.885407166, 100000.0, 0.0)
 const RCOOHData = GasData(2.027959554, 1520.0, 1.0)
 
-# Previous `LinearInterpolation`-based lookup. Replaced because Wesely's table
-# indices are CATEGORICAL (5 seasons × 11 land-use classes) — interpolating
-# between them is meaningless, and doing so was also numerically wrong at the
-# last entry.
-#
-# The bug: for `r_i[5,11]` the flat index is `(11-1)*5+5 = 55`, the final node.
-# At interior nodes the interpolator lands exactly on a grid point and returns
-# it, but at the last node it must evaluate the closing segment
-# `u[54] + (u[55]-u[54])` — and `u[54]` is `r_i[4,11] = inf = 1.0e25`. Since
-# `ulp(1e25) ≈ 2.1e9 ≫ 300`, the 300 is annihilated and the result is `0.0`
-# instead of `300.0` (a magnitude problem, not a Float32 one — it happens in
-# Float64 too). `r_i` is the only table with `inf` at `[4,11]`, so exactly 1 of
-# 385 entries was affected.
-#
-# Impact: `r_i = 0` → `r_s = 0` → `rsmx = r_mx` → in the parallel-conductance
-# sum `1/rsmx` swamps every other pathway → `Rc` clamps to its 10 s/m floor →
-# maximum deposition velocity over rocky shrubs in Transitional season
-# (Mar–May). Measured Vd overestimate: O3 4.8×, SO2 3.8×, NO2 10.5×.
-#=
-function obtain_value(iSeason, iLandUse, matrix)
-    index = (iLandUse - 1) * 5 + iSeason
-    interp = DataInterpolations.LinearInterpolation(vec(matrix), 1:55;
-        extrapolation = DataInterpolations.ExtrapolationType.Constant)
-    return interp(index)
-end
-=#
-
 # Tables indexed by the `tbl` argument of `wesely_table` below. Order is
 # load-bearing: `obtain_value` maps a matrix to its index by `===`.
 const _WESELY_TABLES = (r_i, r_lu, r_ac, r_gsS, r_gsO, r_clS, r_clO)
@@ -468,10 +441,16 @@ end
 
 # Area-weighted surface resistance combining all 11 Wesely (1989) land-use classes
 # as parallel conductances: 1/Rc_eff = Σᵢ (fᵢ / Rc_i), where Rc_i is the Wesely
-# surface resistance for class i. Matches CMAQ STAGE (Pleim & Ran, 2011) and
-# GEOS-Chem `drydep_mod`. Classes with fᵢ = 0 contribute zero (no early-exit
-# since fractions may be symbolic). Fractions should sum to ≈ 1; any leftover
-# is silently dropped.
+# surface resistance for class i. Classes with fᵢ = 0 contribute zero (no
+# early-exit since fractions may be symbolic). Fractions should sum to ≈ 1; any
+# leftover is silently dropped.
+#
+# NOTE: this blends only Rc and then applies a single Ra + Rb at the call site.
+# GEOS-Chem instead area-weights the total conductance, Σᵢ fᵢ/(Ra + Rb + Rcᵢ)
+# (`drydep_mod.F90:2191,2220`), and CMAQ STAGE additionally varies z₀ and u*
+# per tile. Blending Rc alone always gives a Vd >= the GEOS-Chem form; the gap
+# is <1% for single-class-dominated cells but reaches ~30% for water/land
+# mixtures under stable conditions.
 function FractionalWesleyRc(
         gasData::GasData, G, Ts, θ, iSeason,
         f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,

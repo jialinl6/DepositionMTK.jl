@@ -13,10 +13,12 @@
     )
 end
 
-# Scalar-landuse `DryDepositionGas` test disabled: that constructor is
-# commented out in `src/dry_deposition.jl`. The chemistry-side coupling it
-# exercised now runs through `DryDepositionGasFractional`, which uses the
-# same `DryDepositionGasCoupler` (see the fractional test further below).
+# Scalar-landuse `DryDepositionGas` test disabled: that constructor no longer
+# exists in `src/dry_deposition.jl` (the exported `DryDepositionGas` now
+# resolves to the unrelated Seinfeld-Pandis ch. 19 component). The
+# chemistry-side coupling it exercised now runs through
+# `DryDepositionGasFractional`, which uses the same `DryDepositionGasCoupler`
+# (see the fractional test further below).
 #=
 @testitem "GasChemExt SuperFast DryDeposition" begin
     using AtmosphericDeposition, GasChem, EarthSciMLBase, ModelingToolkit
