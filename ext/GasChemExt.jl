@@ -15,10 +15,14 @@ function EarthSciMLBase.couple2(
             #c.SO2 => d.SO2 => c.SO2, # SuperFast does not currently have SO2
             c.HNO3 => d.k_HNO3 => -c.HNO3,
             c.NO2 => d.k_NO2 => -c.NO2,
-            c.NO => d.k_NO2 => -c.NO,
+            # GEOS-Chem does not dry-deposit NO: the species database carries no
+            # Is_DryDep flag for it (checked 14.6.3, 14.7.1 and main), so it never
+            # enters INIT_DRYDEP. Wesely (1989) gives the reason -- NO and NO2
+            # interconvert too rapidly for a separate NO flux to be meaningful.
+            #c.NO => d.k_NO => -c.NO,
             c.O3 => d.k_O3 => -c.O3,
             c.H2O2 => d.k_H2O2 => -c.H2O2,
-            c.CH2O => d.k_HCHO => -c.CH2O
+            c.CH2O => d.k_CH2O => -c.CH2O
         )
     )
 end
@@ -55,10 +59,14 @@ function EarthSciMLBase.couple2(
             #c.SO2 => d.SO2 => c.SO2, # Pollu does not currently include SO2
             c.HNO3 => d.k_HNO3 => -c.HNO3,
             c.NO2 => d.k_NO2 => -c.NO2,
-            c.NO => d.k_NO2 => -c.NO,
+            # GEOS-Chem does not dry-deposit NO: the species database carries no
+            # Is_DryDep flag for it (checked 14.6.3, 14.7.1 and main), so it never
+            # enters INIT_DRYDEP. Wesely (1989) gives the reason -- NO and NO2
+            # interconvert too rapidly for a separate NO flux to be meaningful.
+            #c.NO => d.k_NO => -c.NO,
             c.O3 => d.k_O3 => -c.O3,
             c.PAN => d.k_PAN => -c.PAN,
-            c.CH2O => d.k_HCHO => -c.CH2O
+            c.CH2O => d.k_CH2O => -c.CH2O
         )
     )
 end
@@ -228,8 +236,6 @@ function EarthSciMLBase.couple2(
         convert(System, c),
         d,
         Dict(
-            c.NO2 => d.k_othergas => -c.NO2,
-            c.O3 => d.k_othergas => -c.O3,
             c.ACTA => d.k_othergas => -c.ACTA,
             c.ALD2 => d.k_othergas => -c.ALD2,
             c.AROMP4 => d.k_othergas => -c.AROMP4,
@@ -259,7 +265,7 @@ function EarthSciMLBase.couple2(
             c.HI => d.k_othergas => -c.HI,
             c.HMHP => d.k_othergas => -c.HMHP,
             c.HMML => d.k_othergas => -c.HMML,
-            c.HMS => d.k_othergas => -c.HMS,
+            c.HMS => d.k_particle => -c.HMS,
             c.HNO3 => d.k_othergas => -c.HNO3,
             c.HOBr => d.k_othergas => -c.HOBr,
             c.HOCl => d.k_othergas => -c.HOCl,
@@ -286,10 +292,10 @@ function EarthSciMLBase.couple2(
             c.IHN2 => d.k_othergas => -c.IHN2,
             c.IHN3 => d.k_othergas => -c.IHN3,
             c.IHN4 => d.k_othergas => -c.IHN4,
-            c.INDIOL => d.k_othergas => -c.INDIOL,
+            c.INDIOL => d.k_particle => -c.INDIOL,
             c.INPB => d.k_othergas => -c.INPB,
             c.INPD => d.k_othergas => -c.INPD,
-            c.IONITA => d.k_othergas => -c.IONITA,
+            c.IONITA => d.k_particle => -c.IONITA,
             c.IONO => d.k_othergas => -c.IONO,
             c.IONO2 => d.k_othergas => -c.IONO2,
             c.ITCN => d.k_othergas => -c.ITCN,
@@ -307,13 +313,13 @@ function EarthSciMLBase.couple2(
             c.MEK => d.k_othergas => -c.MEK,
             c.MGLY => d.k_othergas => -c.MGLY,
             c.MOH => d.k_othergas => -c.MOH,
-            c.MONITA => d.k_othergas => -c.MONITA,
+            c.MONITA => d.k_particle => -c.MONITA,
             c.MONITS => d.k_othergas => -c.MONITS,
             c.MONITU => d.k_othergas => -c.MONITU,
             c.MP => d.k_othergas => -c.MP,
             c.MPAN => d.k_othergas => -c.MPAN,
             c.MPN => d.k_othergas => -c.MPN,
-            c.MSA => d.k_othergas => -c.MSA,
+            c.MSA => d.k_particle => -c.MSA,
             c.MTPA => d.k_othergas => -c.MTPA,
             c.MTPO => d.k_othergas => -c.MTPO,
             c.MVK => d.k_othergas => -c.MVK,
@@ -323,8 +329,8 @@ function EarthSciMLBase.couple2(
             c.MVKHP => d.k_othergas => -c.MVKHP,
             c.MVKN => d.k_othergas => -c.MVKN,
             c.MVKPC => d.k_othergas => -c.MVKPC,
-            c.NIT => d.k_othergas => -c.NIT,
-            c.NITs => d.k_othergas => -c.NITs,
+            c.NIT => d.k_particle => -c.NIT,
+            c.NITs => d.k_particle => -c.NITs,
             c.NPHEN => d.k_othergas => -c.NPHEN,
             c.PAN => d.k_othergas => -c.PAN,
             c.PHEN => d.k_othergas => -c.PHEN,
@@ -343,13 +349,13 @@ function EarthSciMLBase.couple2(
             c.RIPC => d.k_othergas => -c.RIPC,
             c.RIPD => d.k_othergas => -c.RIPD,
             c.RP => d.k_othergas => -c.RP,
-            c.SALAAL => d.k_othergas => -c.SALAAL,
-            c.SALCAL => d.k_othergas => -c.SALCAL,
-            c.SALACL => d.k_othergas => -c.SALACL,
-            c.SALCCL => d.k_othergas => -c.SALCCL,
-            c.SO2 => d.k_othergas => -c.SO2,
-            c.SO4 => d.k_othergas => -c.SO4,
-            c.SO4s => d.k_othergas => -c.SO4s,
+            c.SALAAL => d.k_particle => -c.SALAAL,
+            c.SALCAL => d.k_particle => -c.SALCAL,
+            c.SALACL => d.k_particle => -c.SALACL,
+            c.SALCCL => d.k_particle => -c.SALCCL,
+            c.SO2 => d.k_SO2 => -c.SO2,
+            c.SO4 => d.k_particle => -c.SO4,
+            c.SO4s => d.k_particle => -c.SO4s,
             c.RCOOH => d.k_othergas => -c.RCOOH
         )
     )

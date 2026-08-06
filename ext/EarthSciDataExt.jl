@@ -23,7 +23,7 @@ air_density(P, T) = P / (T * R) * MW_air
 MoninObhukovLength(ρ_air, Ts, u_star, HFLUX) = -ρ_air * Cp * Ts * (u_star)^3 / (vK * g * HFLUX)
 
 # First level pressure thickness using the first 2 values of Ap and Bp
-first_level_pressure_thickness(P) = -0.04804826 * P_unit + P * 0.015048
+first_level_pressure_thickness(P) = -4.804826 * P_unit + P * 0.015048
 
 # Gas dry deposition (fractional / mosaic) bound to GEOS-FP. Binds surface
 # meteorology, the date-driven `season`, and the 11 land-use area fractions
