@@ -439,20 +439,20 @@ function WesleySurfaceResistance(
     return r_c
 end
 
-# Area-weighted surface resistance combining all 11 Wesely (1989) land-use classes
-# as parallel conductances: 1/Rc_eff = Σᵢ (fᵢ / Rc_i), where Rc_i is the Wesely
-# surface resistance for class i. Classes with fᵢ = 0 contribute zero (no
-# early-exit since fractions may be symbolic). Fractions should sum to ≈ 1; any
-# leftover is silently dropped.
+# Area-weighted deposition velocity over the 11 Wesely (1989) land-use classes,
+# Vd = Σᵢ fᵢ / (RaRb + Rc_i), where Rc_i is the Wesely surface resistance for
+# class i and `RaRb` is the (dimensionless) sum of the aerodynamic and
+# quasi-laminar resistances, which do not vary by class. Classes with fᵢ = 0
+# contribute zero (no early-exit since fractions may be symbolic). Fractions
+# should sum to ≈ 1; any leftover is silently dropped.
 #
-# NOTE: this blends only Rc and then applies a single Ra + Rb at the call site.
-# GEOS-Chem instead area-weights the total conductance, Σᵢ fᵢ/(Ra + Rb + Rcᵢ)
-# (`drydep_mod.F90:2191,2220`), and CMAQ STAGE additionally varies z₀ and u*
-# per tile. Blending Rc alone always gives a Vd >= the GEOS-Chem form; the gap
-# is <1% for single-class-dominated cells but reaches ~30% for water/land
-# mixtures under stable conditions.
-function FractionalWesleyRc(
-        gasData::GasData, G, Ts, θ, iSeason,
+# Matches GEOS-Chem `drydep_mod.F90`, which builds `C1X = RA + RB + RSURFC(K,LDT)`
+# inside the land-type loop (:2164) and accumulates
+# `VD += .001*IUSE(I,J,LDT)/C1X` (:2193); its RA/RB come from grid-box USTAR/ZO/OBK
+# and so are identical across tiles. CMAQ STAGE and Zhang et al. (2003) aggregate
+# deposition velocity the same way.
+function FractionalWesleyVd(
+        RaRb, gasData::GasData, G, Ts, θ, iSeason,
         f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
         f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
         rain::Bool, dew::Bool, isSO2::Bool, isO3::Bool
@@ -461,12 +461,13 @@ function FractionalWesleyRc(
         f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
         f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
     )
-    inv_Rc = sum(
-        fractions[i] / WesleySurfaceResistance(
-            gasData, G, Ts, θ, iSeason, i, rain, dew, isSO2, isO3
+    return sum(
+        fractions[i] / (
+            RaRb + WesleySurfaceResistance(
+                gasData, G, Ts, θ, iSeason, i, rain, dew, isSO2, isO3
+            )
         )
         for i in 1:11
     )
-    return 1.0 / inv_Rc
 end
 

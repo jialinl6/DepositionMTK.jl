@@ -370,7 +370,7 @@ end
 # end
 
 # Internal helper, parallel to DryDepGas. Computes Vd using fractional
-# (mosaic) Rc via FractionalWesleyRc instead of the single-class Wesely Rc.
+# (mosaic) land-use weighting via FractionalWesleyVd instead of a single class.
 # Ra, Rb, the level-1 gate, and unit handling are identical to DryDepGas.
 function DryDepGasFractional(
         lev, z, z₀, u_star, L, ρA, gasData::GasData, G, Ts, θ, iwesleySeason,
@@ -383,7 +383,11 @@ function DryDepGasFractional(
     Dg = dH2O(Ts) / gasData.Dh2oPerDx
     Sc = sc(μ, ρA, Dg)
     Rb = RbGas(Sc, u_star)
-    Rc = FractionalWesleyRc(
+    # `FractionalWesleyVd` works in dimensionless resistances (as
+    # `WesleySurfaceResistance` returns), so hand it (Ra + Rb) / Rc_unit and
+    # divide the resulting dimensionless conductance by Rc_unit to get m/s.
+    vd = FractionalWesleyVd(
+        (Ra + Rb) / Rc_unit,
         gasData,
         G * G_unitless,
         (Ts * T_unitless - 273),
@@ -392,9 +396,9 @@ function DryDepGasFractional(
         f_urban, f_agricultural, f_range, f_deciduous, f_coniferous,
         f_mixedforest, f_water, f_barren, f_wetland, f_rangeag, f_rockyshrubs,
         rain, dew, isSO2, isO3
-    ) * Rc_unit
+    ) / Rc_unit
     i = ifelse(lev == 1, 1, 0)
-    return i / (Ra + Rb + Rc)
+    return i * vd
 end
 
 
@@ -984,7 +988,7 @@ function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
 
     # Per-species `GasData` table. Broadcasting `DryDepGasFractional.(...,
     # datas, ..., isSO2, isO3)` picks one `GasData` (and the matching SO2/O3
-    # flag) per equation. `FractionalWesleyRc` is NOT registered, so its
+    # flag) per equation. `FractionalWesleyVd` is NOT registered, so its
     # 11-class loop is traced symbolically into every species' equation.
     datas = [
         NoData,

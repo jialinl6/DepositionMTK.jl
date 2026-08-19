@@ -1,6 +1,6 @@
 @testsnippet FractionalSetup begin
     using AtmosphericDeposition
-    using AtmosphericDeposition: FractionalWesleyRc, landuse_frac_at,
+    using AtmosphericDeposition: FractionalWesleyVd, landuse_frac_at,
         DryDepGasFractional, reload_landuse_fractions!, set_landuse_data_path!
     using Test, DynamicQuantities, ModelingToolkit
     using StaticArrays
@@ -18,8 +18,8 @@ end
         [landuse_frac_at(deg2rad(lon_deg), deg2rad(lat_deg), i) for i in 1:11]
     end
 
-    # All cells in the CONUS interior sum to exactly 1.0 (parallel-conductance
-    # arithmetic in FractionalWesleyRc relies on this).
+    # All cells in the CONUS interior sum to exactly 1.0 (the area weighting in
+    # FractionalWesleyVd relies on this; any leftover is silently dropped).
     for (lon, lat) in [(-100.0, 40.0), (-90.0, 35.0), (-118.0, 34.0), (-75.0, 40.0)]
         @test sum(frac(lon, lat)) ≈ 1.0 atol = 1.0e-5
     end
@@ -75,10 +75,12 @@ end
     end
 end
 
-@testitem "FractionalWesleyRc single-class equality" setup=[FractionalSetup] begin
-    # For each Wesely class i, putting all weight on i should give Rc
-    # exactly equal to WesleySurfaceResistance for class i.
+@testitem "FractionalWesleyVd single-class equality" setup=[FractionalSetup] begin
+    # For each Wesely class i, putting all weight on i must give exactly the
+    # single-class deposition velocity 1/(RaRb + Rc_i). This is the degenerate
+    # case in which the area-weighting cancels entirely.
     G, Ts, θ, iSeason = 800.0, 25.0, 0.0, 1
+    RaRb = 50.0
 
     for i in 1:11
         fractions = zeros(11)
@@ -88,18 +90,19 @@ end
             AtmosphericDeposition.O3Data, G, Ts, θ, iSeason, i,
             false, false, false, true
         )
-        rc_frac = FractionalWesleyRc(
-            AtmosphericDeposition.O3Data, G, Ts, θ, iSeason,
+        vd_frac = FractionalWesleyVd(
+            RaRb, AtmosphericDeposition.O3Data, G, Ts, θ, iSeason,
             fractions...,
             false, false, false, true
         )
-        @test rc_frac ≈ rc_single
+        @test vd_frac ≈ 1 / (RaRb + rc_single)
     end
 end
 
-@testitem "FractionalWesleyRc two-class arithmetic" setup=[FractionalSetup] begin
-    # 50% agricultural, 50% mixed forest — parallel-conductance check for O3.
+@testitem "FractionalWesleyVd two-class arithmetic" setup=[FractionalSetup] begin
+    # 50% agricultural, 50% mixed forest — area-weighted Vd check for O3.
     G, Ts, θ, iSeason = 800.0, 25.0, 0.0, 1
+    RaRb = 50.0
     rc_ag = WesleySurfaceResistance(
         AtmosphericDeposition.O3Data, G, Ts, θ, iSeason, 2,
         false, false, false, true
@@ -108,19 +111,20 @@ end
         AtmosphericDeposition.O3Data, G, Ts, θ, iSeason, 6,
         false, false, false, true
     )
-    rc_expected = 1 / (0.5 / rc_ag + 0.5 / rc_mf)
+    vd_expected = 0.5 / (RaRb + rc_ag) + 0.5 / (RaRb + rc_mf)
 
-    rc_frac = FractionalWesleyRc(
-        AtmosphericDeposition.O3Data, G, Ts, θ, iSeason,
+    vd_frac = FractionalWesleyVd(
+        RaRb, AtmosphericDeposition.O3Data, G, Ts, θ, iSeason,
         0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0,
         false, false, false, true
     )
-    @test rc_frac ≈ rc_expected
+    @test vd_frac ≈ vd_expected
 end
 
-@testitem "FractionalWesleyRc three-class arithmetic" setup=[FractionalSetup] begin
+@testitem "FractionalWesleyVd three-class arithmetic" setup=[FractionalSetup] begin
     # Realistic mixed cell for HNO3: 50% deciduous, 30% coniferous, 20% urban.
     G, Ts, θ, iSeason = 800.0, 25.0, 0.0, 1
+    RaRb = 50.0
     rc_dec = WesleySurfaceResistance(
         AtmosphericDeposition.HNO3Data, G, Ts, θ, iSeason, 4,
         false, false, false, false
@@ -133,14 +137,46 @@ end
         AtmosphericDeposition.HNO3Data, G, Ts, θ, iSeason, 1,
         false, false, false, false
     )
-    rc_expected = 1 / (0.5 / rc_dec + 0.3 / rc_con + 0.2 / rc_urb)
+    vd_expected = 0.5 / (RaRb + rc_dec) + 0.3 / (RaRb + rc_con) +
+        0.2 / (RaRb + rc_urb)
 
-    rc_frac = FractionalWesleyRc(
-        AtmosphericDeposition.HNO3Data, G, Ts, θ, iSeason,
+    vd_frac = FractionalWesleyVd(
+        RaRb, AtmosphericDeposition.HNO3Data, G, Ts, θ, iSeason,
         0.2, 0.0, 0.0, 0.5, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         false, false, false, false
     )
-    @test rc_frac ≈ rc_expected
+    @test vd_frac ≈ vd_expected
+end
+
+@testitem "FractionalWesleyVd is below the Rc-blending form" setup=[FractionalSetup] begin
+    # Direction guard. Blending 1/Rc first and adding a single Ra+Rb afterwards
+    # is the Ra+Rb -> 0 limit of the correct expression, and by concavity of
+    # c -> c/(1+ac) it always gives Vd >= this one, with equality only when
+    # every class shares one Rc. A regression to that form must fail here.
+    G, Ts, θ, iSeason = 800.0, 25.0, 0.0, 1
+    # 96% water + 4% wetland: the widest Rc spread in the bundled CONUS data.
+    fr = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.96, 0.0, 0.04, 0.0, 0.0)
+    rc = [WesleySurfaceResistance(AtmosphericDeposition.O3Data, G, Ts, θ, iSeason, i,
+        false, false, false, true) for i in 1:11]
+
+    for RaRb in (10.0, 50.0, 100.0, 300.0, 500.0)
+        vd_new = FractionalWesleyVd(
+            RaRb, AtmosphericDeposition.O3Data, G, Ts, θ, iSeason,
+            fr..., false, false, false, true
+        )
+        vd_old = 1 / (RaRb + 1 / sum(fr[i] / rc[i] for i in 1:11))
+        @test vd_new < vd_old
+    end
+
+    # Equal Rc across the populated classes => the two forms coincide.
+    fr_eq = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0)  # water, barren
+    if rc[7] ≈ rc[8]
+        vd_new = FractionalWesleyVd(
+            100.0, AtmosphericDeposition.O3Data, G, Ts, θ, iSeason,
+            fr_eq..., false, false, false, true
+        )
+        @test vd_new ≈ 1 / (100.0 + rc[7])
+    end
 end
 
 @testitem "DryDepGasFractional unit" setup=[FractionalSetup] begin
