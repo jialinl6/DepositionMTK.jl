@@ -328,6 +328,7 @@ function DryDepositionAerosol(; name = :DryDepositionAerosol)
         WesleyLandUse::Int = Int(wesleyRangeAg),
             [description = "Index for land use from Wesley (1989)"]
         z = 50, [unit = u"m", description = "Top of the surface layer"]
+        del_P = 1520, [unit = u"Pa", description = "Pressure thickness of level 1"]
         z₀ = 0.04, [unit = u"m", description = "Roughness length"]
         u_star = 0.44, [unit = u"m/s", description = "Friction velocity"]
         L = 0, [unit = u"m", description = "Monin-Obukhov length"]
@@ -348,7 +349,7 @@ function DryDepositionAerosol(; name = :DryDepositionAerosol)
             lev, z, z₀, u_star, L, Dp, Ts, P, ρParticle, ρA,
             SeinfeldSeason, WesleySeason, SeinfeldLandUse, WesleyLandUse
         ),
-        k ~ v / z,
+        k ~ v * g * ρA / del_P,
     ]
 
     return System(

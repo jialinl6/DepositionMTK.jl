@@ -78,12 +78,13 @@ function EarthSciMLBase.couple2(
     )
     d, gp = d.sys, gp.sys
 
-    d = param_to_var(d, :Ts, :z, :z₀, :u_star, :ρA, :L, :lev)
+    d = param_to_var(d, :Ts, :z, :del_P, :z₀, :u_star, :ρA, :L, :lev)
 
     return ConnectorSystem(
         [
             d.Ts ~ gp.A1₊TS,
             d.z ~ 0.1 * gp.A1₊PBLH, # the surface layer height is 10% of the boundary layer height
+            d.del_P ~ first_level_pressure_thickness(gp.I3₊PS),
             d.z₀ ~ gp.A1₊Z0M,
             d.u_star ~ gp.A1₊USTAR,
             d.ρA ~ air_density(gp.P, gp.I3₊T),
