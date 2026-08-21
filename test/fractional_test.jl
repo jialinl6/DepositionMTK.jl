@@ -1,18 +1,29 @@
 @testsnippet FractionalSetup begin
     using AtmosphericDeposition
     using AtmosphericDeposition: FractionalWesleyVd, landuse_frac_at,
-        DryDepGasFractional, reload_landuse_fractions!, set_landuse_data_path!
+        DryDepGasFractional, reload_landuse_fractions!, set_landuse_data_path!,
+        set_landuse_target_grid!, landuse_coverage
     using Test, DynamicQuantities, ModelingToolkit
     using StaticArrays
     using NCDatasets
+
+    const DEFAULT_LANDUSE_NC = joinpath(
+        @__DIR__, "..", "data", "landuse_wesely_conus_0p05.nc")
+
+    # Restore package defaults: bundled source, no target grid.
+    function reset_landuse!()
+        set_landuse_target_grid!(nothing)
+        set_landuse_data_path!(DEFAULT_LANDUSE_NC)
+    end
 end
 
 @testitem "landuse_frac_at bundled CONUS fractions" setup=[FractionalSetup] begin
-    # Bundled NetCDF is MODIS MCD12C1 v6.1 re-classed to Wesely classes.
-    # Verify the physical sanity of fractions at well-known locations:
-    # every cell must sum to 1.0, and the dominant class must match the
-    # geography. Tolerances are loose — we want catastrophic-bug regression
+    # Bundled NetCDF is MODIS MCD12C1 v6.1 re-classed to Wesely classes at the
+    # native 0.05°. Verify the physical sanity of fractions at well-known
+    # locations: every cell must sum to 1.0, and the dominant class must match
+    # the geography. Tolerances are loose — we want catastrophic-bug regression
     # protection, not a pixel-exact comparison to MODIS.
+    reset_landuse!()
 
     function frac(lon_deg, lat_deg)
         [landuse_frac_at(deg2rad(lon_deg), deg2rad(lat_deg), i) for i in 1:11]
@@ -30,6 +41,104 @@ end
     @test frac(-93.5, 42.0)[2] > 0.5
     # Class-7 (water) ≈ 1.0 over Gulf of Mexico.
     @test frac(-88.0, 27.0)[7] > 0.95
+end
+
+@testitem "landuse conservative regrid onto a coarse grid" setup=[FractionalSetup] begin
+    # Remapping the 0.05° source onto a 5° × 4° grid must area-average, not
+    # point-sample: a coastal cell has to come out genuinely mixed. Point
+    # sampling would return a single source cell, i.e. 0.0/1.0 fractions.
+    try
+        set_landuse_target_grid!(collect(-127.5:5.0:-62.5), collect(22.0:4.0:50.0))
+        reload_landuse_fractions!()
+
+        frac(lo, la) = [landuse_frac_at(deg2rad(lo), deg2rad(la), i) for i in 1:11]
+
+        # Mid-Atlantic coast: land and water in the same 5° × 4° box.
+        v = frac(-77.5, 38.0)
+        @test sum(v) ≈ 1.0 atol = 1.0e-5
+        @test count(>(0.001), v) >= 4        # genuinely mixed
+        @test 0.02 < v[7] < 0.9              # some water, not all water
+
+        # Conservation holds on every cell of the coarse grid.
+        for lo in -127.5:5.0:-62.5, la in 22.0:4.0:50.0
+            @test sum(frac(lo, la)) ≈ 1.0 atol = 1.0e-5
+        end
+    finally
+        reset_landuse!()
+    end
+end
+
+@testitem "landuse remap conserves the area integral" setup=[FractionalSetup] begin
+    # The defining property of a conservative remap: the area-weighted integral
+    # of each class is unchanged. Area on a uniform lon/lat grid is
+    # proportional to dlon * (sin(lat_hi) - sin(lat_lo)).
+    using AtmosphericDeposition: _read_landuse_nc, _remap_landuse
+    src, slon, slat = _read_landuse_nc(
+        joinpath(@__DIR__, "..", "data", "landuse_wesely_conus_0p05.nc"))
+
+    function integral(f, lon, lat, dlo, dla)
+        a = [dlo * (sind(la + dla / 2) - sind(la - dla / 2)) for _ in lon, la in lat]
+        [sum(a .* @view f[:, :, c]) for c in 1:size(f, 3)]
+    end
+    Is = integral(src, slon, slat, 0.05, 0.05)
+
+    # Targets that exactly tile the source window, coarse and very coarse.
+    for (dlo, dla) in ((2.0, 2.5), (3.5, 5.0))
+        tlon = collect((-130.0 + dlo / 2):dlo:(-60.0 - dlo / 2))
+        tlat = collect((20.0 + dla / 2):dla:(55.0 - dla / 2))
+        out = _remap_landuse(src, slon, slat, tlon, tlat, dlo, dla)
+        It = integral(out, tlon, tlat, dlo, dla)
+        @test maximum(abs.(It .- Is) ./ Is) < 1.0e-6
+    end
+
+    # A uniform field must survive exactly, at any target resolution.
+    flat = fill(0.25f0, size(src, 1), size(src, 2), 4)
+    o = _remap_landuse(flat, slon, slat, collect(-129.0:2.0:-61.0),
+        collect(21.25:2.5:53.75), 2.0, 2.5)
+    @test maximum(abs.(o .- 0.25f0)) == 0.0
+end
+
+@testitem "landuse single-cell axis needs an explicit cell size" setup=[FractionalSetup] begin
+    # Cell size cannot be recovered from the centres of a one-cell axis. Guessing
+    # it silently produced a point sample where a whole-window average was meant.
+    using AtmosphericDeposition: _read_landuse_nc, _remap_landuse
+    src, slon, slat = _read_landuse_nc(
+        joinpath(@__DIR__, "..", "data", "landuse_wesely_conus_0p05.nc"))
+
+    @test_throws ErrorException _remap_landuse(src, slon, slat, [-95.0], [37.5])
+
+    # Given the size, one cell spanning the window equals the window mean.
+    o = _remap_landuse(src, slon, slat, [-95.0], [37.5], 70.0, 35.0)
+    a = [0.05 * (sind(la + 0.025) - sind(la - 0.025)) for _ in slon, la in slat]
+    tot = sum(a)
+    expected = [sum(a .* @view src[:, :, c]) / tot for c in 1:11]
+    @test maximum(abs.(vec(o) .- expected)) < 1.0e-6
+end
+
+@testitem "landuse out-of-coverage raises instead of clamping" setup=[FractionalSetup] begin
+    # Silently clamping an out-of-range query to the nearest boundary cell is
+    # what turns an unsupported domain into plausible-looking wrong numbers.
+    reset_landuse!()
+    cov = landuse_coverage()
+    @test cov.lon[1] ≈ -130.0 atol = 1.0e-3
+    @test cov.lat[2] ≈ 55.0 atol = 1.0e-3
+
+    # Just inside coverage still resolves.
+    @test landuse_frac_at(deg2rad(-129.0), deg2rad(21.0), 7) >= 0.0
+
+    # Outside on any side throws, and names the offending coordinate.
+    @test_throws ErrorException landuse_frac_at(deg2rad(-145.0), deg2rad(40.0), 1)
+    @test_throws ErrorException landuse_frac_at(deg2rad(-100.0), deg2rad(5.0), 1)
+    @test_throws ErrorException landuse_frac_at(deg2rad(-40.0), deg2rad(40.0), 1)
+    @test_throws ErrorException landuse_frac_at(deg2rad(-100.0), deg2rad(70.0), 1)
+
+    err = try
+        landuse_frac_at(deg2rad(-145.0), deg2rad(40.0), 1)
+        nothing
+    catch e
+        sprint(showerror, e)
+    end
+    @test occursin("-145.0", err)
 end
 
 @testitem "landuse_frac_at lookup varies with lat/lon" setup=[FractionalSetup] begin
@@ -56,8 +165,8 @@ end
             defVar(ds, "fraction", frac, ("lon", "lat", "class"))
         end
 
-        old_cache = nothing
         try
+            set_landuse_target_grid!(nothing)
             set_landuse_data_path!(path)
             # Western point — urban
             @test landuse_frac_at(deg2rad(-120.0), deg2rad(40.0), 1) == 1.0
@@ -65,12 +174,11 @@ end
             # Eastern point — water
             @test landuse_frac_at(deg2rad(-70.0), deg2rad(40.0), 1) == 0.0
             @test landuse_frac_at(deg2rad(-70.0), deg2rad(40.0), 7) == 1.0
-            # Out-of-range query (south of grid) clamps to nearest cell.
-            @test landuse_frac_at(deg2rad(-120.0), deg2rad(10.0), 1) == 1.0
+            # Out-of-range query (south of grid) raises rather than clamping.
+            @test_throws ErrorException landuse_frac_at(
+                deg2rad(-120.0), deg2rad(10.0), 1)
         finally
-            # Reset to the bundled default for subsequent tests.
-            default_path = joinpath(@__DIR__, "..", "data", "landuse_fractions_conus.nc")
-            set_landuse_data_path!(default_path)
+            reset_landuse!()
         end
     end
 end
@@ -204,7 +312,58 @@ end
     ) == u"m/s"
 end
 
+@testitem "landuse lazy population is thread-safe" setup=[FractionalSetup] begin
+    # SolverStrangThreads means several threads can reach the first lookup at
+    # once. The population must happen once and all threads must agree.
+    try
+        set_landuse_target_grid!(collect(-120.0:1.0:-80.0), collect(30.0:1.0:45.0))
+        # Deliberately do NOT call reload_landuse_fractions!: leave the cache
+        # cold so the threads race on the lazy path.
+        n = max(4, Threads.nthreads())
+        out = Vector{Float64}(undef, n)
+        Threads.@threads for k in 1:n
+            out[k] = landuse_frac_at(deg2rad(-100.0), deg2rad(40.0), 2)
+        end
+        @test all(==(out[1]), out)
+        @test 0.0 <= out[1] <= 1.0
+    finally
+        reset_landuse!()
+    end
+end
+
+@testitem "DryDepositionGasFractional(domain) validates coverage" setup=[FractionalSetup] begin
+    using EarthSciMLBase, Dates
+
+    dom(lonrange, latrange) = DomainInfo(
+        DateTime(2016, 2, 1), DateTime(2016, 2, 2);
+        lonrange = lonrange, latrange = latrange, levrange = 1:3
+    )
+
+    try
+        # Inside coverage: constructs, and records the grid so lookups land on
+        # the simulation cells.
+        @test DryDepositionGasFractional(
+            dom(deg2rad(-120.0):deg2rad(1.0):deg2rad(-80.0),
+                deg2rad(30.0):deg2rad(1.0):deg2rad(45.0))
+        ) isa ModelingToolkit.AbstractSystem
+
+        # West of -130: must fail at construction, not mid-solve.
+        @test_throws ErrorException DryDepositionGasFractional(
+            dom(deg2rad(-145.0):deg2rad(1.0):deg2rad(-80.0),
+                deg2rad(30.0):deg2rad(1.0):deg2rad(45.0))
+        )
+        # North of 55.
+        @test_throws ErrorException DryDepositionGasFractional(
+            dom(deg2rad(-120.0):deg2rad(1.0):deg2rad(-80.0),
+                deg2rad(30.0):deg2rad(1.0):deg2rad(60.0))
+        )
+    finally
+        reset_landuse!()
+    end
+end
+
 @testitem "DryDepositionGasFractional constructor" setup=[FractionalSetup] begin
+    reset_landuse!()
     sys = DryDepositionGasFractional()
 
     @test sys isa ModelingToolkit.AbstractSystem

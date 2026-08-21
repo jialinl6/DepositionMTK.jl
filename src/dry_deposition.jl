@@ -417,7 +417,18 @@ expression assuming Northern-Hemisphere mid-latitudes. Chemistry-side wiring
 `couple2` methods on `DryDepositionGasCoupler` in `ext/GasChemExt.jl`.
 
 Default fraction values (uncoupled): `f_mixedforest = 1.0`, others = 0.0.
+
+Pass the `DomainInfo` being coupled to — `DryDepositionGasFractional(domain)` —
+to have the land-use source conservatively area-averaged onto the simulation
+grid. Coverage is checked immediately, so a domain outside the available data
+fails here rather than mid-solve. Without a domain there is no cell size to
+average over, and the source grid is sampled directly.
 """
+function DryDepositionGasFractional(domain; name = :DryDepositionGasFractional)
+    record_landuse_grid!(domain)
+    return DryDepositionGasFractional(; name = name)
+end
+
 function DryDepositionGasFractional(; name = :DryDepositionGasFractional)
     rain = false
     dew = false
