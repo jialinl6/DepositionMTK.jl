@@ -10,9 +10,14 @@
     const DEFAULT_LANDUSE_NC = joinpath(
         @__DIR__, "..", "data", "landuse_wesely_conus_0p05.nc")
 
-    # Restore package defaults: bundled source, no target grid.
+    # Restore the bundled source on a known grid. A target grid is mandatory —
+    # without one there is no cell to area-average over — so tests that only
+    # care about lookups declare the 0.625° × 0.5° CONUS grid.
+    const TEST_LON = collect(-125.625:0.625:-66.25)
+    const TEST_LAT = collect(24.5:0.5:49.5)
+
     function reset_landuse!()
-        set_landuse_target_grid!(nothing)
+        set_landuse_target_grid!(TEST_LON, TEST_LAT)
         set_landuse_data_path!(DEFAULT_LANDUSE_NC)
     end
 end
@@ -115,6 +120,27 @@ end
     @test maximum(abs.(vec(o) .- expected)) < 1.0e-6
 end
 
+@testitem "landuse without a target grid raises" setup=[FractionalSetup] begin
+    # No grid means no cell to average over, so a lookup would hand a coarse
+    # cell whichever single 0.05° source pixel sits at its centroid. That is
+    # less representative than the pre-baked file this source replaced, and
+    # nothing downstream could tell, so it must fail loudly instead.
+    try
+        set_landuse_target_grid!(nothing)
+        set_landuse_data_path!(DEFAULT_LANDUSE_NC)   # populates -> must raise
+        @test false  # unreachable
+    catch e
+        msg = sprint(showerror, e)
+        @test occursin("simulation grid", msg)
+        @test occursin("DryDepositionGasFractional(domain)", msg)
+    finally
+        reset_landuse!()
+    end
+
+    # And it recovers as soon as a grid is declared.
+    @test 0.0 <= landuse_frac_at(deg2rad(-100.0), deg2rad(40.0), 2) <= 1.0
+end
+
 @testitem "landuse out-of-coverage raises instead of clamping" setup=[FractionalSetup] begin
     # Silently clamping an out-of-range query to the nearest boundary cell is
     # what turns an unsupported domain into plausible-looking wrong numbers.
@@ -123,8 +149,11 @@ end
     @test cov.lon[1] ≈ -130.0 atol = 1.0e-3
     @test cov.lat[2] ≈ 55.0 atol = 1.0e-3
 
-    # Just inside coverage still resolves.
-    @test landuse_frac_at(deg2rad(-129.0), deg2rad(21.0), 7) >= 0.0
+    # Inside the declared grid still resolves. Note the lookup is bounded by
+    # the target grid, not by the wider source window: -129° is within the
+    # source but outside the CONUS grid declared here, so it raises too.
+    @test landuse_frac_at(deg2rad(-120.0), deg2rad(40.0), 7) >= 0.0
+    @test_throws ErrorException landuse_frac_at(deg2rad(-129.0), deg2rad(21.0), 7)
 
     # Outside on any side throws, and names the offending coordinate.
     @test_throws ErrorException landuse_frac_at(deg2rad(-145.0), deg2rad(40.0), 1)
@@ -166,7 +195,7 @@ end
         end
 
         try
-            set_landuse_target_grid!(nothing)
+            set_landuse_target_grid!(collect(lon), collect(lat))
             set_landuse_data_path!(path)
             # Western point — urban
             @test landuse_frac_at(deg2rad(-120.0), deg2rad(40.0), 1) == 1.0

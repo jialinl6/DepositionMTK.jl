@@ -154,6 +154,24 @@ function _remap_landuse(src, src_lon, src_lat, tgt_lon, tgt_lat,
     return out
 end
 
+# Without a target grid there is no cell to average over, and a bare lookup
+# would hand a ~50 km cell whichever single ~5 km source pixel sits at its
+# centroid. Refuse rather than return that: it is not a representative
+# fraction for the cell, and nothing downstream can tell the difference.
+@noinline function _no_target_grid_error(src_lon, src_lat)
+    error("""
+    Land-use fractions need the simulation grid before they can be used.
+    The source is $(round(_spacing(src_lon), digits=4))° × \
+    $(round(_spacing(src_lat), digits=4))°, so a bare lookup would sample one \
+    source cell per query rather than area-average over your grid cell.
+
+    Pass the domain when building the system:
+        DryDepositionGasFractional(domain)
+    or set the grid directly:
+        set_landuse_target_grid!(lon_centres_deg, lat_centres_deg;
+                                 dlon = ..., dlat = ...)""")
+end
+
 function _populate_landuse_cache!()
     path = _LANDUSE_NC_PATH[]
     isfile(path) || error(
@@ -163,13 +181,12 @@ function _populate_landuse_cache!()
     frac, lon, lat = _read_landuse_nc(path)
 
     target = _LANDUSE_TARGET[]
-    if target !== nothing
-        _check_landuse_coverage(target.lon, target.lat, lon, lat,
-            target.dlon, target.dlat)
-        frac = _remap_landuse(frac, lon, lat, target.lon, target.lat,
-            target.dlon, target.dlat)
-        lon, lat = target.lon, target.lat
-    end
+    target === nothing && _no_target_grid_error(lon, lat)
+    _check_landuse_coverage(target.lon, target.lat, lon, lat,
+        target.dlon, target.dlat)
+    frac = _remap_landuse(frac, lon, lat, target.lon, target.lat,
+        target.dlon, target.dlat)
+    lon, lat = target.lon, target.lat
 
     _LANDUSE_FRAC[]     = frac
     _LANDUSE_LON_MIN[]  = lon[1]
