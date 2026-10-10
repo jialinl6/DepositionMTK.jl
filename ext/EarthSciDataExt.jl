@@ -25,11 +25,15 @@ MoninObhukovLength(ρ_air, Ts, u_star, HFLUX) = -ρ_air * Cp * Ts * (u_star)^3 /
 # First level pressure thickness using the first 2 values of Ap and Bp
 first_level_pressure_thickness(P) = -4.804826 * P_unit + P * 0.015048
 
-# Constant aerodynamic-resistance reference height for surface gas dry deposition.
-# Deposition acts at lev=1, where the layer-bottom height above ground is 0, so a
-# height-above-ground reference would give log(z/z₀) = log(0) = NaN. A fixed 30 m
-# reference also keeps the multi-layer height interpolation out of the deposition RHS.
-@constants z_min_dep = 30.0 [unit = u"m", description = "Surface dry-deposition aerodynamic reference height"]
+# First level midpoint height above ground from the hypsometric relation, using the
+# mean of the level-1 and 2 m virtual temperatures
+@constants(Rd = 287.05,
+    [unit = u"J/(kg*K)", description = "Dry-air gas constant"],
+    g₀ = 9.80665,
+    [unit = u"m*s^-2", description = "Standard gravity"])
+first_level_midpoint_height(PS, T, QV, T2M, QV2M) =
+    Rd / g₀ * 0.5 * (T * (1 + 0.61 * QV) + T2M * (1 + 0.61 * QV2M)) *
+    log(PS / (PS - first_level_pressure_thickness(PS) / 2))
 
 # Gas dry deposition (fractional / mosaic) bound to GEOS-FP. Binds surface
 # meteorology, the date-driven `season`, and the 11 land-use area fractions
@@ -52,7 +56,7 @@ function EarthSciMLBase.couple2(
     return ConnectorSystem(
         [
             d.Ts ~ gp.A1₊TS,
-            d.z ~ z_min_dep,   # constant 30 m floor; height above ground is 0 at lev=1 → log(0) NaN
+            d.z ~ first_level_midpoint_height(gp.I3₊PS, gp.I3₊T, gp.I3₊QV, gp.A1₊T2M, gp.A1₊QV2M),
             d.del_P ~ first_level_pressure_thickness(gp.I3₊PS),
             d.z₀ ~ gp.A1₊Z0M,
             d.u_star ~ gp.A1₊USTAR,
