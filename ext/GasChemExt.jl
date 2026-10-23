@@ -2,37 +2,38 @@ module GasChemExt
 
 using AtmosphericDeposition, GasChem, EarthSciMLBase, DynamicQuantities, ModelingToolkit
 
+# SuperFast(; aerosol = false) and GasChem <= 0.11.2 have no SO2, NH3, SO4, NH4 or NIT.
+_has_species(c, s) = any(u -> Symbol(ModelingToolkit.getname(u)) === s, unknowns(c))
+
 function EarthSciMLBase.couple2(
         c::GasChem.SuperFastCoupler,
         d::AtmosphericDeposition.DryDepositionGasCoupler
     )
     c, d = c.sys, d.sys
 
-    return operator_compose(
-        convert(System, c),
-        d,
-        Dict(
-            # SO2 and NH3 dry deposition: both have fast Wesely deposition via
-            # dedicated k_SO2/k_NH3 channels. Without these sinks their emissions
-            # accumulate unphysically (NH3 -> ISORROPIA converts the excess to
-            # tens-of-ppb NH4 aerosol).
-            c.SO2 => d.k_SO2 => -c.SO2,
-            c.NH3 => d.k_NH3 => -c.NH3,
-            c.HNO3 => d.k_HNO3 => -c.HNO3,
-            c.NO2 => d.k_NO2 => -c.NO2,
-            # NO is not dry-deposited because GEOS-Chem does not dry-deposit it
-            # (its species database has no Is_DryDep flag for NO).
-            #c.NO => d.k_NO => -c.NO,
-            c.O3 => d.k_O3 => -c.O3,
-            c.H2O2 => d.k_H2O2 => -c.H2O2,
-            # k_CH2O (CH2OData: Hstar=3.0e3, f0=1.0 — matches the GEOS-Chem species
-            # database exactly), NOT the legacy Wesely-table k_HCHO (HchoData:
-            # Hstar=6.0e3, f0=0). f0=0 disables the surface-reactivity pathway and
-            # makes v_d(CH2O) ~15x too slow vs GEOS-Chem. The GEOSChemGasPhase
-            # coupling below already uses k_CH2O; this aligns SuperFast with it.
-            c.CH2O => d.k_CH2O => -c.CH2O
-        )
+    translate = Dict(
+        c.HNO3 => d.k_HNO3 => -c.HNO3,
+        c.NO2 => d.k_NO2 => -c.NO2,
+        # NO is not dry-deposited because GEOS-Chem does not dry-deposit it
+        # (its species database has no Is_DryDep flag for NO).
+        #c.NO => d.k_NO => -c.NO,
+        c.O3 => d.k_O3 => -c.O3,
+        c.H2O2 => d.k_H2O2 => -c.H2O2,
+        # k_CH2O (CH2OData: Hstar=3.0e3, f0=1.0 — matches the GEOS-Chem species
+        # database exactly), NOT the legacy Wesely-table k_HCHO (HchoData:
+        # Hstar=6.0e3, f0=0). f0=0 disables the surface-reactivity pathway and
+        # makes v_d(CH2O) ~15x too slow vs GEOS-Chem. The GEOSChemGasPhase
+        # coupling below already uses k_CH2O; this aligns SuperFast with it.
+        c.CH2O => d.k_CH2O => -c.CH2O
     )
+    # SO2 and NH3 dry deposition: both have fast Wesely deposition via
+    # dedicated k_SO2/k_NH3 channels. Without these sinks their emissions
+    # accumulate unphysically (NH3 -> ISORROPIA converts the excess to
+    # tens-of-ppb NH4 aerosol).
+    for (s, k) in ((:SO2, :k_SO2), (:NH3, :k_NH3))
+        _has_species(c, s) && (translate[getproperty(c, s)] = getproperty(d, k) => -getproperty(c, s))
+    end
+    return operator_compose(convert(System, c), d, translate)
 end
 
 function EarthSciMLBase.couple2(
@@ -41,24 +42,19 @@ function EarthSciMLBase.couple2(
     )
     c, d = c.sys, d.sys
 
-    return operator_compose(
-        convert(System, c),
-        d,
-        Dict(
-            # Soluble gases SO2 (dedicated channel) + NH3 (highly
-            # soluble -> generic soluble-gas rate); aerosol species SO4/NH4/NIT
-            # scavenge at the particle rate.
-            c.SO2 => d.k_SO2 => -c.SO2,
-            c.NH3 => d.k_othergas => -c.NH3,
-            c.SO4 => d.k_particle => -c.SO4,
-            c.NH4 => d.k_particle => -c.NH4,
-            c.NIT => d.k_particle => -c.NIT,
-            c.HNO3 => d.k_othergas => -c.HNO3,
-            c.H2O2 => d.k_othergas => -c.H2O2,
-            c.CH2O => d.k_othergas => -c.CH2O,
-            c.CH3OOH => d.k_othergas => -c.CH3OOH
-        )
+    translate = Dict(
+        c.HNO3 => d.k_othergas => -c.HNO3,
+        c.H2O2 => d.k_othergas => -c.H2O2,
+        c.CH2O => d.k_othergas => -c.CH2O,
+        c.CH3OOH => d.k_othergas => -c.CH3OOH
     )
+    # Soluble gases SO2 (dedicated channel) + NH3 (highly
+    # soluble -> generic soluble-gas rate); aerosol species SO4/NH4/NIT
+    # scavenge at the particle rate.
+    for (s, k) in ((:SO2, :k_SO2), (:NH3, :k_othergas), (:SO4, :k_particle), (:NH4, :k_particle), (:NIT, :k_particle))
+        _has_species(c, s) && (translate[getproperty(c, s)] = getproperty(d, k) => -getproperty(c, s))
+    end
+    return operator_compose(convert(System, c), d, translate)
 end
 
 function EarthSciMLBase.couple2(

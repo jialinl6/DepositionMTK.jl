@@ -52,6 +52,24 @@ end
     @test contains(eqs, "SuperFast₊WetDeposition_k_othergas")
 end
 
+@testitem "GasChemExt gas-only SuperFast deposition" begin
+    using AtmosphericDeposition, GasChem, EarthSciMLBase, ModelingToolkit
+    sf = try
+        SuperFast(; aerosol = false)    # needs GasChem with the `aerosol` keyword
+    catch e
+        e isa MethodError || rethrow()
+        nothing
+    end
+    if sf === nothing
+        @test_skip "GasChem without SuperFast(; aerosol = false)"
+    else
+        eqs = string(equations(convert(System, couple(sf, DryDepositionGasFractional(), WetDeposition()))))
+        @test occursin(r"SuperFast₊DryDepositionGas\w*_k_O3", eqs)
+        @test contains(eqs, "SuperFast₊WetDeposition_k_othergas")
+        @test !contains(eqs, "SO2")
+    end
+end
+
 @testitem "AerosolExt" setup = [ConnectorSetup] begin
     model = couple(
         GEOSFP("4x5", domain),
